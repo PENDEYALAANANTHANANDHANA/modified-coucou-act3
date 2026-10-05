@@ -88,10 +88,11 @@ export interface Settings {
   screen: "primary" | "cursor";
   autostart: boolean;
   hooksInstalled: boolean;
-  /** Claude model used by the chat. */
+  /** Selected model used by the active provider. */
   model: string;
-  provider: "anthropic" | "online" | "openrouter" | "ollama";
+  provider: "openrouter" | "ollama";
   onlineBaseUrl: string;
+  openrouterBaseUrl: string;
   ollamaUrl: string;
 }
 
@@ -106,9 +107,10 @@ export const DEFAULT_SETTINGS: Settings = {
   screen: "primary",
   autostart: false,
   hooksInstalled: false,
-  model: "claude-opus-5",
-  provider: "anthropic",
+  model: "openrouter/auto",
+  provider: "openrouter",
   onlineBaseUrl: "https://api.openai.com/v1",
+  openrouterBaseUrl: "https://openrouter.ai/api/v1",
   ollamaUrl: "http://127.0.0.1:11434",
 };
 

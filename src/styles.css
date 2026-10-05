@@ -75,6 +75,20 @@ button { border: 0; cursor: pointer; }
 .save-button { width: 100%; margin-top: 5px; padding: 10px; border-radius: 11px; color: #211827; background: #e8c3ff; font-size: 11px; font-weight: 700; }
 .settings-result { display: block; min-height: 14px; padding-top: 8px; color: #94e3bd; font-size: 10px; }
 
+/* ── Settings panel: fieldsets, status rows, action buttons ─────────────── */
+.settings-fieldset { border: 1px solid rgba(255,255,255,.08); border-radius: 12px; padding: 10px 12px 12px; margin: 10px 0 4px; }
+.settings-fieldset legend { color: #c3b6ff; font-size: 10px; font-weight: 600; letter-spacing: .04em; padding: 0 5px; }
+.settings-status-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 2px; }
+.settings-status-label { color: #878394; font-size: 10px; }
+.settings-status-value { font-size: 10px; font-weight: 500; padding: 2px 7px; border-radius: 6px; }
+.settings-status-value.key-present { color: #94e3bd; background: rgba(148,227,189,.1); }
+.settings-status-value.key-missing { color: #f4505e; background: rgba(244,80,94,.1); }
+.settings-btn-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.inline-btn { padding: 6px 11px; border-radius: 9px; color: #c6c1d1; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.08); font-size: 10px; font-weight: 500; transition: background .2s, color .2s, transform .15s; }
+.inline-btn:hover { color: #fff; background: rgba(255,255,255,.14); }
+.inline-btn:active { transform: scale(.95); }
+.settings-actions { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.06); }
+
 @keyframes float { 0%, 100% { transform: translateY(0) rotate(-1deg); } 50% { transform: translateY(-7px) rotate(1deg); } }
 @keyframes bounce { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-9px) scale(1.03); } }
 @keyframes twinkle { 0%, 100% { opacity: .65; transform: rotate(0); } 50% { opacity: 1; transform: rotate(14deg) scale(1.08); } }

@@ -109,7 +109,7 @@ export class Island {
       collapse: () => this.collapse(),
       setFocus: (id) => {
         State.setFocus(id);
-        Sound.play("blip");
+        Sound.play("pop");
       },
       openTerminal: () => {
         const cwd = State.focusTask?.sessionCwd ?? null;
@@ -163,8 +163,15 @@ export class Island {
         void Bridge.saveSettings(State.settings);
         State.notify();
       },
-      openSettingsWindow: () => void Bridge.openSettingsWindow(),
-      blip: () => Sound.play("blip"),
+      openSettingsWindow: () => {
+        Sound.play("pop");
+        void Bridge.openSettingsWindow().catch((err) => {
+          State.noteMessage = `Could not open settings: ${String(err).replace(/^Error:\s*/, "")}`;
+          this.setView("note");
+          Sound.play("error");
+        });
+      },
+      blip: () => Sound.play("pop"),
     };
 
     this.wakeStrip = h("div", { id: "wake-strip" });
@@ -637,7 +644,6 @@ export class Island {
       if (performance.now() / 1000 - this.lastLoveTime < 6) return;
       this.lastLoveTime = performance.now() / 1000;
       this.engine.triggerEmote("love");
-      Sound.play("love");
     }, 1900);
   }
 

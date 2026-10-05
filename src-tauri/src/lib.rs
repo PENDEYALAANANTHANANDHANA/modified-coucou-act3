@@ -260,6 +260,26 @@ async fn chat_send(
 }
 
 #[tauri::command]
+async fn run_custom_task(
+    shared: State<'_, Shared>,
+    instructions: String,
+) -> Result<ChatReply, String> {
+    let instructions = instructions.trim();
+    if instructions.is_empty() {
+        return Err("Task instructions cannot be empty.".into());
+    }
+    if instructions.len() > 10_000 {
+        return Err("Task instructions must be 10,000 bytes or fewer.".into());
+    }
+    let settings = shared.settings.lock().unwrap().clone();
+    let task_chat = Chat::default();
+    let prompt = format!(
+        "Complete this user-defined task and clearly report the result. Do not claim to have changed files, apps, or external systems unless you actually did so. If the task requires an action you cannot perform, explain the next steps.\n\nTask:\n{instructions}"
+    );
+    claude::send(&task_chat, &settings, prompt, None).await
+}
+
+#[tauri::command]
 fn search_files(root: String, query: String) -> Result<Vec<safe_tools::FileMatch>, String> {
     safe_tools::search(&root, &query)
 }
@@ -285,8 +305,11 @@ fn chat_reset(chat: State<Chat>) {
 }
 
 #[tauri::command]
-async fn test_provider(shared: State<'_, Shared>) -> Result<String, String> {
-    let settings = shared.settings.lock().unwrap().clone();
+async fn test_provider(shared: State<'_, Shared>, provider: Option<String>) -> Result<String, String> {
+    let mut settings = shared.settings.lock().unwrap().clone();
+    if let Some(provider) = provider {
+        settings.provider = provider;
+    }
     claude::test_provider(&settings).await
 }
 
@@ -295,20 +318,21 @@ async fn test_provider(shared: State<'_, Shared>) -> Result<String, String> {
 struct ProviderStatus {
     ollama: String,
     ollama_model: String,
-    anthropic_key: bool,
-    openai_key: bool,
+    ollama_models: Vec<String>,
     openrouter_key: bool,
 }
 
 #[tauri::command]
 async fn provider_status(shared: State<'_, Shared>) -> Result<ProviderStatus, String> {
     let settings = shared.settings.lock().unwrap().clone();
-    let ollama = claude::ollama_status(&settings).await.unwrap_or_else(|error| error);
+    let (ollama, ollama_models) = match claude::ollama_models(&settings).await {
+        Ok(models) => (format!("Active · {} model(s)", models.len()), models),
+        Err(error) => (format!("Inactive · {error}"), Vec::new()),
+    };
     Ok(ProviderStatus {
         ollama,
         ollama_model: settings.model,
-        anthropic_key: secrets::present("anthropic-api-key"),
-        openai_key: secrets::present("online-api-key"),
+        ollama_models,
         openrouter_key: secrets::present("openrouter-api-key"),
     })
 }
@@ -380,7 +404,7 @@ fn settings_page_url(app: &AppHandle) -> WebviewUrl {
 /// hidden afterwards. A WebView2 window created later — on the main thread or
 /// not — silently comes up blank in this app, so the window that works is the
 /// one that exists before the island's webview does.
-fn create_settings_window(app: &AppHandle) {
+fn create_settings_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
     let url = settings_page_url(app);
     match WebviewWindowBuilder::new(app, "settings", url)
         .additional_browser_args(BROWSER_ARGS)
@@ -401,24 +425,30 @@ fn create_settings_window(app: &AppHandle) {
                     let _ = hidden.hide();
                 }
             });
+            Ok(win)
         }
-        Err(err) => log::line(format!("settings window failed: {err}")),
+        Err(err) => {
+            let message = format!("settings window failed: {err}");
+            log::line(&message);
+            Err(message)
+        }
     }
 }
 
-pub fn show_settings_window(app: &AppHandle) {
-    let Some(win) = app.get_webview_window("settings") else {
-        log::line("settings window missing");
-        return;
+pub fn show_settings_window(app: &AppHandle) -> Result<(), String> {
+    let win = match app.get_webview_window("settings") {
+        Some(win) => win,
+        None => create_settings_window(app)?,
     };
     let _ = win.unminimize();
-    let _ = win.show();
-    let _ = win.set_focus();
+    win.show().map_err(|err| format!("could not show settings window: {err}"))?;
+    win.set_focus().map_err(|err| format!("could not focus settings window: {err}"))?;
+    Ok(())
 }
 
 #[tauri::command]
-fn open_settings_window(app: AppHandle) {
-    show_settings_window(&app);
+fn open_settings_window(app: AppHandle) -> Result<(), String> {
+    show_settings_window(&app)
 }
 
 pub fn run() {
@@ -456,6 +486,7 @@ pub fn run() {
             approval_decline,
             log_line,
             chat_send,
+            run_custom_task,
             search_files,
             read_text_file,
             create_text_file,
@@ -476,7 +507,9 @@ pub fn run() {
             let handle = app.handle().clone();
             tray::build(&handle)?;
             // Before the island: see create_settings_window.
-            create_settings_window(&handle);
+            if let Err(err) = create_settings_window(&handle) {
+                log::line(format!("settings window unavailable at startup: {err}"));
+            }
 
             if let Some(win) = island::window(&handle) {
                 platform::make_non_activating(&win);

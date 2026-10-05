@@ -21,7 +21,7 @@ const MAX_TOKENS: u32 = 4096;
 /// Text and code files are inlined; anything larger is skipped, as on macOS.
 const MAX_INLINE_TEXT: u64 = 200_000;
 
-pub const DEFAULT_MODEL: &str = "claude-opus-5";
+pub const DEFAULT_MODEL: &str = "openrouter/auto";
 pub const DEFAULT_OPENROUTER_URL: &str = "https://openrouter.ai/api/v1";
 
 const SYSTEM_PROMPT: &str = "You are ACT 3, a personal AI assistant living at the top of the user's screen. \
@@ -191,7 +191,7 @@ async fn send_online(settings: &Settings, query: String, context: Option<ChatCon
         _ => query,
     };
     let response = reqwest::Client::new()
-        .post(format!("{}/chat/completions", settings.online_base_url.trim_end_matches('/')))
+        .post(format!("{}/chat/completions", online_base_url(settings).trim_end_matches('/')))
         .bearer_auth(key)
         .json(&json!({"model": settings.model, "messages": [{"role": "user", "content": prompt}]}))
         .send().await.map_err(|e| format!("Online provider connection failed: {e}"))?;
@@ -203,42 +203,70 @@ async fn send_online(settings: &Settings, query: String, context: Option<ChatCon
     Ok(ChatReply { text })
 }
 
+fn online_base_url(settings: &Settings) -> &str {
+    if settings.provider == "openrouter" {
+        &settings.openrouter_base_url
+    } else {
+        &settings.online_base_url
+    }
+}
+
 pub async fn test_provider(settings: &Settings) -> Result<String, String> {
     match settings.provider.as_str() {
         "ollama" => {
-            let response = reqwest::Client::new()
-                .get(format!("{}/api/tags", settings.ollama_url.trim_end_matches('/')))
-                .send().await.map_err(|e| format!("Ollama unreachable: {e}"))?;
-            let status = response.status();
-            let body: Value = response.json().await.map_err(|e| format!("Invalid Ollama response: {e}"))?;
-            if !status.is_success() { return Err(format!("Ollama returned {status}")); }
-            let models = body["models"].as_array().map(|v| v.len()).unwrap_or(0);
-            let selected = body["models"].as_array().and_then(|items| items.iter().find(|m| m["name"].as_str() == Some(settings.model.as_str()))).is_some();
-            return Ok(format!("Ollama reachable · {models} models · {}selected", if selected { "" } else { "model not " }));
+            let models = ollama_models(settings).await?;
+            let selected = models.iter().any(|name| name == &settings.model);
+            return Ok(format!("Ollama reachable · {} models · {}selected", models.len(), if selected { "" } else { "model not " }));
         }
         "anthropic" => {
-            if secrets::present("anthropic-api-key") { Ok("Anthropic key is stored securely.".into()) } else { Err("Anthropic API key is not set.".into()) }
+            let key = secrets::get("anthropic-api-key")
+                .ok_or_else(|| "Anthropic API key is not set.".to_string())?;
+            let response = reqwest::Client::new()
+                .get("https://api.anthropic.com/v1/models")
+                .header("x-api-key", key)
+                .header("anthropic-version", ANTHROPIC_VERSION)
+                .send()
+                .await
+                .map_err(|e| format!("Anthropic unreachable: {e}"))?;
+            if response.status().is_success() {
+                Ok("Anthropic reachable · API key accepted.".into())
+            } else {
+                Err(format!("Anthropic returned {}", response.status()))
+            }
         }
 
         "openrouter" | "online" => {
             let key_name = if settings.provider == "openrouter" { "openrouter-api-key" } else { "online-api-key" };
-            if !secrets::present(key_name) { return Err("Provider API key is not set.".into()); }
-            let base = if settings.provider == "openrouter" { DEFAULT_OPENROUTER_URL } else { settings.online_base_url.as_str() };
-            let response = reqwest::Client::new().get(format!("{}/models", base.trim_end_matches('/'))).bearer_auth(secrets::get(key_name).unwrap()).send().await.map_err(|e| format!("Provider unreachable: {e}"))?;
+            let key = secrets::get(key_name).ok_or_else(|| "Provider API key is not set.".to_string())?;
+            let response = reqwest::Client::new()
+                .get(format!("{}/models", online_base_url(settings).trim_end_matches('/')))
+                .bearer_auth(key)
+                .send()
+                .await
+                .map_err(|e| format!("Provider unreachable: {e}"))?;
             if response.status().is_success() { Ok("Provider reachable · API key accepted.".into()) } else { Err(format!("Provider returned {}", response.status())) }
         }
         _ => Err("Unknown provider.".into()),
     }
 }
 
-pub async fn ollama_status(settings: &Settings) -> Result<String, String> {
+pub async fn ollama_models(settings: &Settings) -> Result<Vec<String>, String> {
     let response = reqwest::Client::new()
         .get(format!("{}/api/tags", settings.ollama_url.trim_end_matches('/')))
-        .send().await.map_err(|e| format!("Inactive · {e}"))?;
-    if !response.status().is_success() { return Err(format!("Inactive · HTTP {}", response.status())); }
-    let body: Value = response.json().await.map_err(|e| format!("Inactive · {e}"))?;
-    let count = body["models"].as_array().map(|items| items.len()).unwrap_or(0);
-    Ok(format!("Active · {count} model(s)"))
+        .send().await.map_err(|e| format!("Ollama unreachable: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Ollama returned HTTP {}", response.status()));
+    }
+    let body: Value = response.json().await.map_err(|e| format!("Invalid Ollama response: {e}"))?;
+    let models = body["models"]
+        .as_array()
+        .ok_or_else(|| "Invalid Ollama response: models list is missing.".to_string())?;
+    Ok(models
+        .iter()
+        .filter_map(|model| model["name"].as_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 async fn call(key: &str, body: &Value) -> Result<Value, String> {
