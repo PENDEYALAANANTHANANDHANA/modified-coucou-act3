@@ -21,7 +21,7 @@ Keep an AI companion at the top of your screen, use Ollama or OpenRouter, create
 
 ## Install
 
-Download **`ACT-3-Windows-0.1.2-setup.exe`** or **`setup.exe`** from the latest
+Download **`ACT-3-Windows-X.Y.Z-setup.exe`** or **`setup.exe`** from the latest
 GitHub Release and run it. The installer is unsigned, so Windows SmartScreen may
 show a warning; only continue if you downloaded it from this repository and
 trust the source.
