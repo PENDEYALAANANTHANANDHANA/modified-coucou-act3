@@ -109,6 +109,15 @@ export const STATE_SOUND: Partial<Record<BotStateName, string>> = {
   sleeping: "sleep", dizzy: "dizzy",
 };
 
+const EMOTE_SOUND: Partial<Record<BotEmoteName, string>> = {
+  love: "love",
+  surprised: "pop",
+  proud: "proud",
+  wink: "wink",
+  yawn: "yawn",
+  happy: "pop",
+};
+
 const EMOTE_EYE: Record<BotEmoteName, EyeShape> = {
   love: "heart", surprised: "dot", proud: "star", wink: "wink",
   yawn: "tired", happy: "happy", annoyed: "line",
@@ -231,6 +240,10 @@ export class BotEngine {
     if (!this.locks.has("tint")) this.tint = this.cfg.tint;
     if (!this.locks.has("tilt")) this.tgTilt = this.cfg.tilt;
     this.setBadge(this.cfg.badge);
+    if (!this.isMini) {
+      const sound = STATE_SOUND[next];
+      if (sound) Sound.play(sound);
+    }
 
     switch (next) {
       case "finished":
@@ -379,6 +392,8 @@ export class BotEngine {
 
   triggerEmote(emote: BotEmoteName, duration = 1.8) {
     const t = now();
+    const sound = EMOTE_SOUND[emote];
+    if (sound) Sound.play(sound);
     this.eyeOverride = EMOTE_EYE[emote];
     this.eyeOverrideUntil = t + duration;
 

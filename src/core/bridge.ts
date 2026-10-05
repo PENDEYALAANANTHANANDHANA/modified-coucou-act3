@@ -58,7 +58,7 @@ export const Bridge = {
 
   quit: () => call<void>("quit_app"),
 
-  openSettingsWindow: () => call<void>("open_settings_window"),
+  openSettingsWindow: () => callOrThrow<void>("open_settings_window"),
 
   /** Writes to %LOCALAPPDATA%\ACT 3\act3.log, next to the Rust lines. */
   log: (message: string) => call<void>("log_line", { message }),
@@ -85,6 +85,8 @@ export const Bridge = {
   /** One chat turn. The API key and any file bytes never leave Rust. */
   chatSend: (query: string, context: ChatContext | null) =>
     callOrThrow<{ text: string }>("chat_send", { query, context }),
+  runCustomTask: (instructions: string) =>
+    callOrThrow<{ text: string }>("run_custom_task", { instructions }),
   searchFiles: (root: string, query: string) =>
     callOrThrow<FileMatch[]>("search_files", { root, query }),
   readTextFile: (root: string, path: string) =>
@@ -94,7 +96,8 @@ export const Bridge = {
   copyTextToClipboard: (contents: string) =>
     callOrThrow<void>("copy_text_to_clipboard", { contents }),
   chatReset: () => call<void>("chat_reset"),
-  testProvider: () => callOrThrow<string>("test_provider"),
+  testProvider: (provider?: Settings["provider"]) =>
+    callOrThrow<string>("test_provider", provider ? { provider } : undefined),
   providerStatus: () => callOrThrow<ProviderStatus>("provider_status"),
   /** Copies a dropped file into the inbox. */
   ingestFile: (path: string) => callOrThrow<DroppedFile>("ingest_file", { path }),
@@ -142,8 +145,7 @@ export interface HookStatus {
 export interface ProviderStatus {
   ollama: string;
   ollamaModel: string;
-  anthropicKey: boolean;
-  openaiKey: boolean;
+  ollamaModels: string[];
   openrouterKey: boolean;
 }
 

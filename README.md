@@ -6,7 +6,7 @@
 
 **A Windows desk buddy inspired by Coucou, rebuilt as ACT 3.**
 
-Keep an AI companion at the top of your screen, use Ollama or online providers, search and create text files safely, run focus timers, and chat without leaving what you're doing.
+Keep an AI companion at the top of your screen, use Ollama or OpenRouter, create reusable AI tasks, run focus timers, and chat without leaving what you're doing.
 
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%2F11-0078D4?logo=windows)
 ![Tauri 2](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)
@@ -26,15 +26,14 @@ run it. The installer is unsigned, so Windows SmartScreen may show a warning;
 only continue if you downloaded it from this repository and trust the source.
 
 ACT 3 installs for the current Windows user and does not require administrator
-access. Ollama is optional; configure it in Settings, or choose an online
-provider and enter your own API key.
+access. Configure Ollama in Settings, or choose OpenRouter and add your API key.
 
 ## Using it
 
 <img src="screenshots/compact.png" width="292" alt="The compact island, with the integration pills as mini Mochis">
 <img src="screenshots/overview.png" width="640" alt="The overview: the focused integration on the left, the other pills on the right">
 <img src="screenshots/approval.png" width="640" alt="A Claude Code permission request, with Deny and Allow">
-<img src="screenshots/chat.png" width="640" alt="Chatting with Claude from the island">
+<img src="screenshots/chat.png" width="640" alt="Chatting with ACT 3 from the island">
 <img src="screenshots/drop.png" width="640" alt="Mochi turned into a box, waiting for a file">
 
 | What you do | What happens |
@@ -51,14 +50,15 @@ Everything else happens on its own: a Claude Code permission request opens the
 island with **Deny / Allow**, a finished session shows what it did, and
 your integrations sit in the coloured pills next to Mochi.
 
-### Simple tasks
+### Tasks
 
-Open the **Tools** tab and enter one bounded task. ACT 3 supports opening a URL
-or web search, opening an existing local file or folder, copying text, starting
-a focus timer, and setting a reminder. Creating a new text note always requires
-an explicit confirmation and refuses to overwrite an existing file. Arbitrary
-commands, deletion, credentials, and hidden background actions are not
-supported.
+Open the **Tools** tab to run a quick action or make a reusable task. Saved tasks
+can have any name and instructions; ACT 3 sends them to the selected OpenRouter
+or Ollama model and displays its response. They do not change files or apps
+automatically. Quick actions can open a URL or web search, open an existing
+local file or folder, copy text, start a focus timer, and set a reminder.
+Creating a new text note always requires explicit confirmation and refuses to
+overwrite an existing file.
 
 ## Claude Code
 
@@ -79,9 +79,10 @@ It works from any terminal — Windows Terminal, PowerShell, VS Code, Git Bash.
 
 ## Chat and keys
 
-**Settings… → Claude** takes your Anthropic API key. Keys live in the **Windows
-Credential Manager**, never on disk and never in the interface — the island can
-only ask whether a key exists. Same for every integration key.
+**Settings… → OpenRouter and Ollama** selects the chat provider and model. The
+OpenRouter key lives in the **Windows Credential Manager**, never on disk or in
+the interface; local Ollama does not require a key. Claude Code hooks are a
+separate integration and can be left disabled if you do not use Claude Code.
 
 No telemetry. The only network requests Coucou makes are to the services you
 configure yourself.
@@ -116,9 +117,8 @@ optional — `target/release/act3.exe` runs on its own. There is no window in th
 taskbar and no console: the island at the top of the screen and the Mochi in the
 notification area are the whole app, and Quit lives in its menu.
 
-The 28 sounds are the macOS app's own files; they are never duplicated in this
-folder. The path is declared once, in `SOUNDS_DIR` at the top of
-`vite.config.ts` — when they move to `shared/sounds/`, change that one line.
+Sound effects are served and bundled from `assets/sounds/`. The path is declared
+once, in `SOUNDS_DIR` at the top of `vite.config.ts`.
 
 The app icon and the tray icon are drawn in code, like Mochi itself:
 
@@ -135,7 +135,7 @@ windows/
     island/            state machine, hooks, integrations
     views/             every island view
     settings/          the settings window
-  src-tauri/           Rust backend: window, named pipe, Claude API, pollers
+  src-tauri/           Rust backend: window, named pipe, provider clients, pollers
   hook/                coucou-hook.exe, the Claude Code relay
   scripts/             icon generator
 ```

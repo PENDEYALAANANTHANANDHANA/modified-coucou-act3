@@ -3,10 +3,8 @@ import { existsSync, mkdirSync, readdirSync, copyFileSync, createReadStream } fr
 import { resolve, join, extname } from "node:path";
 
 // ───────────────────────────────────────────────────────────────────────────────
-// THE one and only place the shared sound folder is declared.
-// The 28 WAVs live in the macOS app and are NOT duplicated in the repo; when they
-// move to `shared/sounds/`, change this single line.
-export const SOUNDS_DIR = resolve(__dirname, "../NotchBuddy/Resources/sounds");
+// THE one and only place the sound folder is declared.
+export const SOUNDS_DIR = resolve(__dirname, "assets/sounds");
 // ───────────────────────────────────────────────────────────────────────────────
 
 /**

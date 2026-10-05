@@ -12,6 +12,7 @@ import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
 import { Bridge } from "../core/bridge";
+import { Sound } from "../core/sound";
 import { executeTask, parseTask, TASK_HELP } from "../tools/task-runner";
 
 export interface ViewActions {
@@ -55,7 +56,13 @@ function btn(
 ): HTMLElement {
   return h(
     "button",
-    { class: `btn ${kind}`, onclick: onClick },
+    {
+      class: `btn ${kind}`,
+      onclick: () => {
+        Sound.play("pop");
+        onClick();
+      },
+    },
     h("span", { text: label }),
     kbd ? h("span", { class: "kbd", text: kbd }) : null,
   );
@@ -89,7 +96,7 @@ export function buildHeader(actions: ViewActions): ViewHost {
   const soundBtn = h("button", { title: "Mute", onclick: () => actions.toggleSound() }, svg(ICONS.speakerOn, 14));
 
   function go(v: IslandViewName) {
-    actions.blip();
+    Sound.play("pop");
     actions.setView(v);
   }
 
@@ -285,7 +292,7 @@ function buildEmpty(actions: ViewActions): ViewHost {
       h("div", { class: "sub", text: "Drop a file or window, or ask me anything." }),
     ),
     h("div", { class: "grow" }),
-    btn("Ask Claude", "primary", () => actions.setView("prompt")),
+    btn("Ask ACT 3", "primary", () => actions.setView("prompt")),
   );
   return { el: h("div", { class: "view" }, card(null, body)), sync() {} };
 }
@@ -552,6 +559,146 @@ function buildTools(actions: ViewActions): ViewHost {
     taskStatus.textContent = result.message;
     if (result.ok || !result.needsConfirmation) taskConfirm.checked = false;
   });
+  interface UserTask {
+    id: string;
+    name: string;
+    instructions: string;
+  }
+  const userTaskName = h("input", {
+    class: "tool-input",
+    placeholder: "Task name",
+    maxlength: "100",
+  }) as HTMLInputElement;
+  const userTaskInstructions = h("textarea", {
+    class: "tool-textarea",
+    placeholder: "Describe anything you want ACT 3 to help with…",
+    maxlength: "4000",
+    rows: "3",
+  }) as HTMLTextAreaElement;
+  const userTaskStatus = h("div", {
+    class: "tool-muted",
+    text: "Saved tasks run as prompts through your selected model; they do not change files or apps automatically.",
+  });
+  const userTaskList = h("div", { class: "saved-tasks" });
+  const userTaskStorageKey = "act3.userTasks";
+  const isUserTask = (value: unknown): value is UserTask =>
+    typeof value === "object" &&
+    value !== null &&
+    "id" in value && typeof value.id === "string" &&
+    "name" in value && typeof value.name === "string" &&
+    "instructions" in value && typeof value.instructions === "string";
+  let userTasks: UserTask[] = [];
+  let editingTaskId: string | null = null;
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(userTaskStorageKey) ?? "[]");
+    if (!Array.isArray(saved) || !saved.every(isUserTask)) {
+      throw new Error("Saved task data is invalid.");
+    }
+    userTasks = saved;
+  } catch (error) {
+    userTaskStatus.textContent = `Could not load saved tasks: ${String(error).replace(/^Error:\s*/, "")}`;
+  }
+
+  function persistUserTasks(next: UserTask[], message: string): boolean {
+    try {
+      localStorage.setItem(userTaskStorageKey, JSON.stringify(next));
+      userTasks = next;
+      userTaskStatus.textContent = message;
+      renderUserTasks();
+      return true;
+    } catch (error) {
+      userTaskStatus.textContent = `Could not save tasks: ${String(error).replace(/^Error:\s*/, "")}`;
+      Sound.play("error");
+      return false;
+    }
+  }
+
+  function renderUserTasks() {
+    clear(userTaskList);
+    for (const task of userTasks) {
+      const output = h("div", { class: "custom-task-output", hidden: true });
+      const run = btn("Run", "primary", async () => {
+        run.disabled = true;
+        run.textContent = "Running…";
+        output.hidden = false;
+        output.textContent = "Working…";
+        const previousOverride = State.stateOverride;
+        State.stateOverride = "thinking";
+        State.notify();
+        try {
+          const result = await Bridge.runCustomTask(task.instructions);
+          output.textContent = result.text;
+          Sound.play("finish");
+          userTaskStatus.textContent = `Finished “${task.name}”.`;
+        } catch (error) {
+          output.textContent = `Task failed: ${String(error).replace(/^Error:\s*/, "")}`;
+          Sound.play("error");
+          userTaskStatus.textContent = `Could not run “${task.name}”.`;
+        } finally {
+          State.stateOverride = previousOverride;
+          State.notify();
+          run.disabled = false;
+          run.textContent = "Run";
+        }
+      }) as HTMLButtonElement;
+      const edit = btn("Edit", "secondary", () => {
+        editingTaskId = task.id;
+        userTaskName.value = task.name;
+        userTaskInstructions.value = task.instructions;
+        saveUserTask.textContent = "Update task";
+        userTaskStatus.textContent = `Editing “${task.name}”.`;
+      });
+      const remove = btn("Remove", "secondary", () => {
+        if (persistUserTasks(userTasks.filter((item) => item.id !== task.id), `Removed “${task.name}”.`) && editingTaskId === task.id) {
+          resetUserTaskForm();
+        }
+      });
+      userTaskList.append(
+        h("div", { class: "saved-task" },
+          h("strong", { class: "tool-label", text: task.name }),
+          h("p", { class: "tool-muted", text: task.instructions }),
+          h("div", { class: "tool-actions" }, run, edit, remove),
+          output,
+        ),
+      );
+    }
+  }
+
+  function resetUserTaskForm() {
+    editingTaskId = null;
+    userTaskName.value = "";
+    userTaskInstructions.value = "";
+    saveUserTask.textContent = "Add task";
+  }
+
+  const saveUserTask = btn("Add task", "secondary", () => {
+    const name = userTaskName.value.trim();
+    const instructions = userTaskInstructions.value.trim();
+    if (!name || !instructions) {
+      userTaskStatus.textContent = "Enter a task name and instructions first.";
+      return;
+    }
+    if (name.length > 100 || instructions.length > 4000) {
+      userTaskStatus.textContent = "Task names are limited to 100 characters and instructions to 4,000.";
+      return;
+    }
+    if (!editingTaskId && userTasks.length >= 30) {
+      userTaskStatus.textContent = "You can save up to 30 tasks.";
+      return;
+    }
+    const task: UserTask = {
+      id: editingTaskId ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      instructions,
+    };
+    const next = editingTaskId
+      ? userTasks.map((item) => item.id === editingTaskId ? task : item)
+      : [...userTasks, task];
+    if (persistUserTasks(next, editingTaskId ? `Updated “${name}”.` : `Saved “${name}”.`)) {
+      resetUserTaskForm();
+    }
+  });
+  renderUserTasks();
   const rootInput = h("input", { class: "tool-input", placeholder: "Folder root, e.g. C:\\Users\\you\\Documents" }) as HTMLInputElement;
   const fileQuery = h("input", { class: "tool-input", placeholder: "File name contains…" }) as HTMLInputElement;
   const fileStatus = h("div", { class: "tool-muted", text: "Search and read stay inside the selected root." });
@@ -587,10 +734,19 @@ function buildTools(actions: ViewActions): ViewHost {
   const el = h("div", { class: "view tools-view" },
     card("indigo", h("div", { class: "tool-grid" },
       h("div", { class: "tool-section task-runner" },
-        h("div", { class: "tool-title", text: "Simple task runner" }),
+        h("div", { class: "tool-title", text: "Quick actions" }),
         h("div", { class: "tool-row" }, taskInput, runTask),
         h("div", { class: "tool-row" }, taskConfirm, h("span", { class: "tool-muted", text: "I confirm creating a new note" })),
         taskStatus,
+      ),
+      h("div", { class: "tool-section task-maker" },
+        h("div", { class: "tool-title", text: "Make your own task" }),
+        h("div", { class: "tool-muted", text: "Name it, describe what you want, then save and run it whenever you like." }),
+        userTaskName,
+        userTaskInstructions,
+        h("div", { class: "tool-row" }, saveUserTask),
+        userTaskStatus,
+        userTaskList,
       ),
       h("div", { class: "tool-section" }, h("div", { class: "tool-title", text: "Search" }), h("div", { class: "tool-row" }, search, youtube, web)),
       h("div", { class: "tool-section" }, writing),
@@ -669,7 +825,7 @@ export function buildViews(
   map.set("choose", buildChoose(actions));
   // Not in the Windows v1: sending a file by email, window attach + web result.
   map.set("mail", buildPlaceholder("Sending by email isn't in this version.", ""));
-  map.set("searching", buildPlaceholder("Claude is searching…", ""));
+  map.set("searching", buildPlaceholder("ACT 3 is searching…", ""));
   map.set("result", buildPlaceholder("Result", ""));
   map.set("tools", buildTools(actions));
   return map;

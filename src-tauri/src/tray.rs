@@ -21,7 +21,11 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .on_menu_event(|app: &AppHandle, event| match event.id.as_ref() {
             "quit" => app.exit(0),
-            "settings" => crate::show_settings_window(app),
+            "settings" => {
+                if let Err(err) = crate::show_settings_window(app) {
+                    crate::log::line(format!("settings: {err}"));
+                }
+            }
             id => {
                 let _ = app.emit_to(WINDOW_LABEL, "tray", id.to_string());
             }

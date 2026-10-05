@@ -16,7 +16,7 @@ pub struct Settings {
     pub screen: String,
     pub autostart: bool,
     pub hooks_installed: bool,
-    /// Claude model used by the chat. Changeable in the settings window.
+    /// Selected model used by the active provider. Changeable in the settings window.
     /// Defaulted explicitly so a settings.json written by an older build still loads.
     #[serde(default = "default_model")]
     pub model: String,
@@ -24,6 +24,8 @@ pub struct Settings {
     pub provider: String,
     #[serde(default = "default_online_base_url")]
     pub online_base_url: String,
+    #[serde(default = "default_openrouter_base_url")]
+    pub openrouter_base_url: String,
     #[serde(default = "default_ollama_url")]
     pub ollama_url: String,
 }
@@ -32,8 +34,9 @@ fn default_model() -> String {
     crate::claude::DEFAULT_MODEL.to_string()
 }
 
-fn default_provider() -> String { "anthropic".into() }
+fn default_provider() -> String { "openrouter".into() }
 fn default_online_base_url() -> String { "https://api.openai.com/v1".into() }
+fn default_openrouter_base_url() -> String { crate::claude::DEFAULT_OPENROUTER_URL.to_string() }
 fn default_ollama_url() -> String { "http://127.0.0.1:11434".into() }
 
 impl Default for Settings {
@@ -50,6 +53,7 @@ impl Default for Settings {
             model: default_model(),
             provider: default_provider(),
             online_base_url: default_online_base_url(),
+            openrouter_base_url: default_openrouter_base_url(),
             ollama_url: default_ollama_url(),
         }
     }
@@ -69,6 +73,16 @@ pub fn load() -> Settings {
     match std::fs::read(settings_path()) {
         Ok(bytes) => {
             let mut settings: Settings = serde_json::from_slice(&bytes).unwrap_or_default();
+            if !matches!(settings.provider.as_str(), "openrouter" | "ollama") {
+                settings.provider = default_provider();
+            }
+            if settings.model.starts_with("claude-") {
+                settings.model = if settings.provider == "ollama" {
+                    "llama3.2".into()
+                } else {
+                    default_model()
+                };
+            }
             settings.active_integrations.retain(|id| id != "integration_n8n" && id != "integration_vercel");
             settings
         }

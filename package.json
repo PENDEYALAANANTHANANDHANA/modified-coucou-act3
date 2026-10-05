@@ -4,9 +4,9 @@
   "version": "0.1.1",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
+    "dev": "vite --config vite.config.ts",
+    "build": "tsc --noEmit && vite build --config vite.config.ts",
+    "preview": "vite preview --config vite.config.ts",
     "icons": "node scripts/gen-icons.mjs",
     "tauri": "tauri",
     "predev": "cargo build --release -p act3-hook",

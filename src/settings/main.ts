@@ -1,6 +1,4 @@
 // Settings window — the place where anything that writes to disk is confirmed.
-// Stage 2 covers the Claude Code hooks and the general preferences; API keys and
-// integrations land here too in a later stage.
 
 import "./settings.css";
 import { Bridge, onEvent, type HookStatus } from "../core/bridge";
@@ -171,21 +169,145 @@ function claudeSection(status: HookStatus): HTMLElement {
   return section;
 }
 
-// ── Claude API section ────────────────────────────────────────────────────────
+// ── AI provider section ───────────────────────────────────────────────────────
 
 const MODELS: [string, string][] = [
-  ["claude-opus-5", "Claude Opus 5"],
-  ["claude-sonnet-5", "Claude Sonnet 5"],
-  ["claude-haiku-4-5", "Claude Haiku 4.5"],
+  ["openrouter/auto", "OpenRouter Auto"],
+  ["openai/gpt-4o-mini", "GPT-4o mini"],
+  ["google/gemini-2.5-flash", "Gemini 2.5 Flash"],
 ];
 
-function apiSection(hasKey: boolean): HTMLElement {
-  const dot = statusDot(hasKey);
-  const state = h("span", { class: "hint", text: hasKey ? "Key saved in the Windows Credential Manager." : "No key yet — the chat needs one." });
+function apiSection(): HTMLElement {
+  const dot = statusDot(false);
+  const state = h("span", { class: "hint", text: "Checking provider setup…" });
+  let detectedOllamaModels: string[] = [];
 
+  // ── Ollama status card ──────────────────────────────────────────────────
+  const ollamaEndpoint = h("span", { class: "path", text: settings.ollamaUrl || "http://127.0.0.1:11434" });
+  const ollamaSelectedModel = h("span", { class: "hint", text: settings.model });
+  const ollamaActiveDot = statusDot(false);
+  const ollamaActiveLabel = h("span", { class: "hint", text: "checking…" });
+  const ollamaModelCount = h("span", { class: "hint", text: "—" });
+
+  const ollamaRefreshBtn = h("button", { class: "secondary", text: "↻ Refresh" });
+  ollamaRefreshBtn.addEventListener("click", async () => {
+    ollamaRefreshBtn.disabled = true;
+    ollamaRefreshBtn.textContent = "Checking…";
+    try {
+      await save();
+      await refreshAllStatus();
+    } finally {
+      ollamaRefreshBtn.disabled = false;
+      ollamaRefreshBtn.textContent = "↻ Refresh";
+    }
+  });
+
+  const ollamaTestBtn = h("button", { class: "secondary", text: "Test connection" });
+  ollamaTestBtn.addEventListener("click", async () => {
+    ollamaTestBtn.disabled = true;
+    ollamaTestBtn.textContent = "Testing…";
+    try {
+      await save();
+      const result = await Bridge.testProvider("ollama");
+      ollamaActiveLabel.textContent = result;
+      ollamaActiveLabel.style.color = "#22c55e";
+      ollamaActiveDot.style.background = "#22c55e";
+      await refreshAllStatus();
+      ollamaActiveLabel.textContent = result;
+    } catch (error) {
+      ollamaActiveLabel.textContent = String(error).replace(/^Error:\s*/, "");
+      ollamaActiveLabel.style.color = "#f4505e";
+      ollamaActiveDot.style.background = "#f4505e";
+    } finally {
+      ollamaTestBtn.disabled = false;
+      ollamaTestBtn.textContent = "Test connection";
+    }
+  });
+
+  const ollamaCard = h(
+    "div",
+    { style: "background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px" },
+    h("div", { style: "font:600 12px var(--font);color:var(--ink);display:flex;align-items:center;gap:6px" },
+      h("span", { text: "Ollama" }),
+    ),
+    h("div", { class: "row" }, h("label", { text: "Endpoint" }), ollamaEndpoint),
+    h("div", { class: "row" }, h("label", { text: "Selected model" }), ollamaSelectedModel),
+    h("div", { class: "row" }, h("label", { text: "Status" }), ollamaActiveDot, ollamaActiveLabel),
+    h("div", { class: "row" }, h("label", { text: "Models detected" }), ollamaModelCount),
+    h("div", { class: "row" }, ollamaRefreshBtn, ollamaTestBtn),
+  );
+
+  // ── Online provider status ──────────────────────────────────────────────
+  function keyBadge(present: boolean, name: string): HTMLElement {
+    const badge = h("span", {
+      style: `display:inline-flex;align-items:center;gap:4px;font:500 11px var(--font);padding:3px 8px;border-radius:6px;${
+        present
+          ? "color:#86efac;background:rgba(34,197,94,0.1)"
+          : "color:#ff8d97;background:rgba(244,80,94,0.1)"
+      }`,
+      text: present ? `${name}: present ✓` : `${name}: missing ✗`,
+    });
+    return badge;
+  }
+
+  const openrouterBadge = keyBadge(false, "OpenRouter");
+
+  const onlineStatusCard = h(
+    "div",
+    { style: "background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px" },
+    h("div", { style: "font:600 12px var(--font);color:var(--ink)" }, h("span", { text: "OpenRouter key status" })),
+    h("div", { style: "display:flex;flex-wrap:wrap;gap:6px" }, openrouterBadge),
+  );
+
+  // ── Refresh all provider status ─────────────────────────────────────────
+  function updateBadge(badge: HTMLElement, present: boolean, name: string) {
+    badge.textContent = present ? `${name}: present ✓` : `${name}: missing ✗`;
+    badge.style.color = present ? "#86efac" : "#ff8d97";
+    badge.style.background = present ? "rgba(34,197,94,0.1)" : "rgba(244,80,94,0.1)";
+  }
+
+  async function refreshAllStatus() {
+    try {
+      const s = await Bridge.providerStatus();
+      // Ollama
+      const isActive = s.ollama.startsWith("Active");
+      ollamaActiveDot.style.background = isActive ? "#22c55e" : "#f4505e";
+      dot.style.background = settings.provider === "ollama"
+        ? (isActive ? "#22c55e" : "#f4505e")
+        : (s.openrouterKey ? "#22c55e" : "#f4505e");
+      ollamaActiveLabel.textContent = s.ollama;
+      ollamaActiveLabel.style.color = "";
+      ollamaEndpoint.textContent = settings.ollamaUrl || "http://127.0.0.1:11434";
+      ollamaSelectedModel.textContent = settings.model;
+      detectedOllamaModels = s.ollamaModels;
+      updateModelOptions();
+      const countMatch = s.ollama.match(/(\d+)\s*model/);
+      ollamaModelCount.textContent = countMatch ? countMatch[1] : "—";
+      updateBadge(openrouterBadge, s.openrouterKey, "OpenRouter");
+    } catch (err) {
+      ollamaActiveDot.style.background = "#f4505e";
+      ollamaActiveLabel.textContent = `Status unavailable: ${String(err).replace(/^Error:\s*/, "")}`;
+      ollamaModelCount.textContent = "—";
+    }
+  }
+
+  const refreshAllBtn = h("button", { class: "secondary", text: "↻ Refresh status" });
+  refreshAllBtn.addEventListener("click", async () => {
+    refreshAllBtn.disabled = true;
+    refreshAllBtn.textContent = "Refreshing…";
+    try {
+      await save();
+      await refreshAllStatus();
+    } finally {
+      refreshAllBtn.disabled = false;
+      refreshAllBtn.textContent = "↻ Refresh status";
+    }
+  });
+
+  // ── API key field ───────────────────────────────────────────────────────
   const field = h("input", {
     type: "password",
-    placeholder: hasKey ? "••••••••••••  (stored)" : "sk-ant-...",
+    placeholder: "OpenRouter API key",
     style: "flex:1 1 auto;min-width:0",
     autocomplete: "off",
     spellcheck: "false",
@@ -194,40 +316,79 @@ function apiSection(hasKey: boolean): HTMLElement {
   const saveBtn = h("button", { class: "primary", text: "Save key" });
   const clearBtn = h("button", { class: "danger", text: "Remove" });
   const feedback = h("div", {});
-  const statusList = h("div", { class: "hint" });
-  const refreshStatus = h("button", { class: "secondary", text: "Refresh status" });
-  const renderStatus = (status: { ollama: string; ollamaModel: string; anthropicKey: boolean; openaiKey: boolean; openrouterKey: boolean }) => {
-    statusList.textContent = `Ollama: ${status.ollama} · model ${status.ollamaModel} · Anthropic key: ${status.anthropicKey ? "saved" : "missing"} · OpenAI-compatible key: ${status.openaiKey ? "saved" : "missing"} · OpenRouter key: ${status.openrouterKey ? "saved" : "missing"}`;
-  };
-  refreshStatus.addEventListener("click", async () => {
-    refreshStatus.textContent = "Refreshing…";
-    try { renderStatus(await Bridge.providerStatus()); }
-    catch (error) { statusList.textContent = `Status unavailable: ${String(error).replace(/^Error:\s*/, "")}`; }
-    finally { refreshStatus.textContent = "Refresh status"; }
-  });
+
+  // ── Provider tabs ───────────────────────────────────────────────────────
   const provider = h("select", {}) as HTMLSelectElement;
   provider.append(
-    h("option", { value: "anthropic", text: "Anthropic Claude" }),
-    h("option", { value: "online", text: "OpenAI-compatible online" }),
     h("option", { value: "openrouter", text: "OpenRouter" }),
     h("option", { value: "ollama", text: "Ollama local" }),
   );
   provider.value = settings.provider;
+  const endpointValue = () => settings.provider === "ollama"
+    ? settings.ollamaUrl
+    : settings.openrouterBaseUrl;
+  const providerTabs = h("div", { class: "row" }, h("label", { text: "Provider" }));
+  const tabButtons: HTMLButtonElement[] = [];
+  for (const [value, label] of [
+    ["openrouter", "OpenRouter"],
+    ["ollama", "Ollama"],
+  ] as const) {
+    const tab = h("button", {
+      class: "secondary",
+      text: label,
+      "data-provider": value,
+      "aria-pressed": settings.provider === value,
+    }) as HTMLButtonElement;
+    tab.addEventListener("click", () => {
+      provider.value = value;
+      provider.dispatchEvent(new Event("change"));
+    });
+    tabButtons.push(tab);
+    providerTabs.append(tab);
+  }
   const endpoint = h("input", {
-    value: settings.provider === "ollama" ? settings.ollamaUrl : settings.provider === "openrouter" ? "https://openrouter.ai/api/v1" : settings.onlineBaseUrl,
-    placeholder: "http://127.0.0.1:11434",
+    value: endpointValue(),
+    placeholder: settings.provider === "ollama" ? "http://127.0.0.1:11434" : "https://openrouter.ai/api/v1",
+    style: "flex:1 1 auto;min-width:0",
+  }) as HTMLInputElement;
+  const modelOptions = h("datalist", { id: "provider-model-options" });
+  const model = h("input", {
+    type: "text",
+    list: "provider-model-options",
+    value: settings.model,
+    placeholder: "Enter a model name",
     style: "flex:1 1 auto;min-width:0",
   }) as HTMLInputElement;
 
+  function updateModelOptions() {
+    clear(modelOptions);
+    const suggestions = settings.provider === "ollama"
+      ? [...detectedOllamaModels]
+      : MODELS.map(([id]) => id);
+    if (settings.model && !suggestions.includes(settings.model)) suggestions.unshift(settings.model);
+    for (const name of suggestions) modelOptions.append(h("option", { value: name }));
+    model.value = settings.model;
+    ollamaSelectedModel.textContent = settings.model;
+  }
+  updateModelOptions();
+
   async function refresh() {
-    const keyName = settings.provider === "anthropic" ? "anthropic-api-key" : settings.provider === "openrouter" ? "openrouter-api-key" : "online-api-key";
+    const keyName = "openrouter-api-key";
     const present = settings.provider === "ollama" || ((await Bridge.secretPresent(keyName)) ?? false);
     dot.style.background = present ? "#22c55e" : "#f4505e";
-    state.textContent = present
-      ? "Key saved in the Windows Credential Manager."
-      : "No key yet — the chat needs one.";
+    state.textContent = settings.provider === "ollama"
+      ? "Ollama does not require an API key."
+      : present
+        ? "Key saved in the Windows Credential Manager."
+        : "No key yet — the chat needs one.";
+    state.style.color = "";
     field.placeholder = settings.provider === "ollama" ? "No key required" : present ? "••••••••••••  (stored)" : "API key";
-    clearBtn.style.display = present ? "" : "none";
+    clearBtn.style.display = settings.provider !== "ollama" && present ? "" : "none";
+    tabButtons.forEach((tab) => {
+      const value = tab.dataset.provider;
+      tab.classList.toggle("primary", value === settings.provider);
+      tab.setAttribute("aria-pressed", String(value === settings.provider));
+    });
   }
 
   saveBtn.addEventListener("click", async () => {
@@ -235,11 +396,12 @@ function apiSection(hasKey: boolean): HTMLElement {
     if (!value) return;
     clear(feedback);
     try {
-      const keyName = settings.provider === "anthropic" ? "anthropic-api-key" : settings.provider === "openrouter" ? "openrouter-api-key" : "online-api-key";
+      const keyName = "openrouter-api-key";
       await Bridge.secretSet(keyName, value);
       field.value = "";
       feedback.append(h("div", { class: "notice ok", text: "Saved. It never touches disk." }));
       await refresh();
+      await refreshAllStatus();
     } catch (err) {
       feedback.append(h("div", { class: "notice err", text: `Could not save: ${String(err)}` }));
     }
@@ -248,74 +410,104 @@ function apiSection(hasKey: boolean): HTMLElement {
   clearBtn.addEventListener("click", async () => {
     clear(feedback);
     try {
-      const keyName = settings.provider === "anthropic" ? "anthropic-api-key" : settings.provider === "openrouter" ? "openrouter-api-key" : "online-api-key";
+      const keyName = "openrouter-api-key";
       await Bridge.secretClear(keyName);
       feedback.append(h("div", { class: "notice ok", text: "Key removed." }));
       await refresh();
+      await refreshAllStatus();
     } catch (err) {
       feedback.append(h("div", { class: "notice err", text: `Could not remove: ${String(err)}` }));
     }
   });
 
-  const model = h("select", {}) as HTMLSelectElement;
-  for (const [id, label] of MODELS) model.append(h("option", { value: id, text: label }));
-  if (!MODELS.some(([id]) => id === settings.model)) {
-    model.append(h("option", { value: settings.model, text: settings.model }));
-  }
-  model.value = settings.model;
   model.addEventListener("change", () => {
-    settings.model = model.value;
+    const value = model.value.trim();
+    if (!value) {
+      model.value = settings.model;
+      return;
+    }
+    settings.model = value;
+    ollamaSelectedModel.textContent = settings.model;
+    updateModelOptions();
     void save();
   });
-  provider.addEventListener("change", () => {
+  model.addEventListener("input", () => {
+    ollamaSelectedModel.textContent = model.value;
+  });
+  provider.addEventListener("change", async () => {
     settings.provider = provider.value as Settings["provider"];
-    endpoint.value = settings.provider === "ollama" ? settings.ollamaUrl : settings.provider === "openrouter" ? "https://openrouter.ai/api/v1" : settings.onlineBaseUrl;
+    endpoint.value = endpointValue();
+    endpoint.placeholder = settings.provider === "ollama" ? "http://127.0.0.1:11434" : "https://openrouter.ai/api/v1";
     field.style.display = settings.provider === "ollama" ? "none" : "";
     saveBtn.style.display = settings.provider === "ollama" ? "none" : "";
     clearBtn.style.display = settings.provider === "ollama" ? "none" : "";
-    void save();
-    void refresh();
+    updateModelOptions();
+    await save();
+    await refresh();
+    await refreshAllStatus();
   });
-  endpoint.addEventListener("change", () => {
+  endpoint.addEventListener("change", async () => {
     if (settings.provider === "ollama") settings.ollamaUrl = endpoint.value.trim();
-    else if (settings.provider === "openrouter") settings.onlineBaseUrl = endpoint.value.trim();
-    else settings.onlineBaseUrl = endpoint.value.trim();
-    void save();
+    else if (settings.provider === "openrouter") settings.openrouterBaseUrl = endpoint.value.trim();
+    if (settings.provider === "ollama") ollamaEndpoint.textContent = settings.ollamaUrl;
+    await save();
   });
   field.style.display = settings.provider === "ollama" ? "none" : "";
   saveBtn.style.display = settings.provider === "ollama" ? "none" : "";
 
-  clearBtn.style.display = hasKey ? "" : "none";
   const testBtn = h("button", { class: "secondary", text: "Test connection" });
   testBtn.addEventListener("click", async () => {
+    testBtn.disabled = true;
     testBtn.textContent = "Testing…";
     try {
-      state.textContent = await Bridge.testProvider();
+      await save();
+      state.textContent = await Bridge.testProvider(settings.provider);
       state.style.color = "#22c55e";
     } catch (error) {
       state.textContent = String(error).replace(/^Error:\s*/, "");
       state.style.color = "#f4505e";
     } finally {
+      testBtn.disabled = false;
       testBtn.textContent = "Test connection";
     }
   });
-  void Bridge.providerStatus().then(renderStatus).catch((error) => {
-    statusList.textContent = `Status unavailable: ${String(error).replace(/^Error:\s*/, "")}`;
+
+  // Kick off initial status fetch
+  void refresh();
+  void refreshAllStatus();
+
+  // ── Open full settings window ───────────────────────────────────────────
+  const openSettingsBtn = h("button", { class: "secondary", text: "⚙ Open Settings" });
+  openSettingsBtn.addEventListener("click", async () => {
+    openSettingsBtn.disabled = true;
+    try {
+      await Bridge.openSettingsWindow();
+    } catch (err) {
+      clear(feedback);
+      feedback.append(h("div", { class: "notice err", text: `Could not open settings: ${String(err)}` }));
+    } finally {
+      openSettingsBtn.disabled = false;
+    }
   });
 
   return h(
     "section",
     {},
-    h("h2", {}, dot, h("span", { text: "AI provider" })),
-    h("div", { class: "row" }, statusList, refreshStatus),
-    h("div", { class: "row" }, h("label", { text: "Provider" }), provider),
+    h("h2", {}, dot, h("span", { text: "OpenRouter and Ollama" })),
+    h("div", { class: "row" }, refreshAllBtn, openSettingsBtn),
+    ollamaCard,
+    onlineStatusCard,
+    providerTabs,
+    h("div", { class: "row" }, provider),
     h("div", { class: "row" }, h("label", { text: "Endpoint" }), endpoint),
     state,
     h("div", { class: "row" }, h("label", { text: "API key" }), field, saveBtn, clearBtn, testBtn),
     h("div", { class: "row" }, h("label", { text: "Model" }), model),
+    modelOptions,
     feedback,
   );
 }
+
 
 // ── Integrations section ──────────────────────────────────────────────────────
 
@@ -485,8 +677,6 @@ async function main() {
     installed: false, settingsPath: "", hookPath: "", hookReady: false,
   };
 
-  const hasKey = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
-
   const keys = [
     "stripe-api-key", "github-token", "resend-api-key", "notion-api-key", "calcom-api-key",
   ];
@@ -497,7 +687,7 @@ async function main() {
   root.append(
     h("h1", {}, h("span", { text: "ACT 3" }), h("span", { class: "version", text: version })),
     claudeSection(status),
-    apiSection(hasKey),
+    apiSection(),
     integrationsSection(present),
     generalSection(),
     h("div", {
