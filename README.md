@@ -21,9 +21,10 @@ Keep an AI companion at the top of your screen, use Ollama or OpenRouter, create
 
 ## Install
 
-Download **`ACT-3-Windows-0.1.2-setup.exe`** from the latest GitHub Release and
-run it. The installer is unsigned, so Windows SmartScreen may show a warning;
-only continue if you downloaded it from this repository and trust the source.
+Download **`ACT-3-Windows-0.1.2-setup.exe`** or **`setup.exe`** from the latest
+GitHub Release and run it. The installer is unsigned, so Windows SmartScreen may
+show a warning; only continue if you downloaded it from this repository and
+trust the source.
 
 ACT 3 installs for the current Windows user and does not require administrator
 access. Configure Ollama in Settings, or choose an online provider and add your
@@ -109,14 +110,14 @@ to work on the island's looks. It also serves `dev/upload-preview.html`, which
 replays the whole file-drop choreography on a loop — the one part of the UI that
 otherwise needs a real drag from Explorer to see. Neither page ships in the app.
 
-`npm run pack` leaves two files in `release/`, the same names the release
-workflow publishes:
+`npm run pack` leaves two files in `release/`:
 
 ```
 ACT-3-Windows-X.Y.Z-setup.exe    the versioned installer
 ACT-3-Windows-setup.exe          the same file under the rolling name
 ```
 
+The GitHub Release also includes `setup.exe`, a copy of the versioned installer.
 To publish a release, update the version in `Cargo.toml` and
 `src-tauri/tauri.conf.json` to the same value, then push a matching `vX.Y.Z` tag.
 The GitHub Actions release workflow builds the Windows installer and attaches it

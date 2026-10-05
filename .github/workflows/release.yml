@@ -27,8 +27,19 @@ jobs:
             throw "Release tag $tagVersion does not match app version $version."
           }
       - run: npm run pack
+      - name: Add generic installer name
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem release/ACT-3-Windows-*-setup.exe |
+            Where-Object { $_.Name -match '^ACT-3-Windows-\d+\.\d+\.\d+-setup\.exe$' })
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one versioned Windows installer, found $($installers.Count)."
+          }
+          Copy-Item $installers[0].FullName release/setup.exe
       - uses: softprops/action-gh-release@v2
         with:
           fail_on_unmatched_files: true
           generate_release_notes: true
-          files: release/ACT-3-Windows-*-setup.exe
+          files: |
+            release/ACT-3-Windows-*-setup.exe
+            release/setup.exe
