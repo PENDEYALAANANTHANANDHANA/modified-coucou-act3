@@ -423,6 +423,11 @@ fn ingest_file(path: String) -> Result<DroppedFile, String> {
     files::ingest(&path)
 }
 
+#[tauri::command]
+fn ingest_files(paths: Vec<String>) -> Result<Vec<DroppedFile>, String> {
+    files::ingest_many(&paths)
+}
+
 /// The island may only ask whether a key exists — never read it.
 #[tauri::command]
 fn secret_present(key: String) -> bool {
@@ -580,6 +585,7 @@ pub fn run() {
             provider_status,
             check_for_update,
             ingest_file,
+            ingest_files,
             secret_present,
             secret_set,
             secret_clear,

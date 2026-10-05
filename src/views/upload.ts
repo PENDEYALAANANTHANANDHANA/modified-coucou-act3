@@ -116,7 +116,7 @@ export function buildChoose(actions: ViewActions): ViewHost {
       clear(title);
       title.append(
         h("b", { text: State.droppedFile?.name ?? "file" }),
-        document.createTextNode(" is ready."),
+        document.createTextNode(State.droppedFiles.length > 1 ? " are ready." : " is ready."),
       );
     },
   };

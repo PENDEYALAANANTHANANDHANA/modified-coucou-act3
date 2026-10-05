@@ -33,6 +33,7 @@ const PRE_PROGRESS = USC.T_PROG_START - USC.T_DROP;
 const modeOrder = (m: IslandMode) => (m === "hidden" ? 0 : m === "compact" ? 1 : 2);
 
 export class Island {
+  private dropGeneration = 0;
   readonly fsm = new IslandStateMachine();
 
   private root: HTMLElement;
@@ -191,9 +192,11 @@ export class Island {
     // the header, which stays visible on top of it exactly as on macOS.
     this.uploadCanvas = new UploadCanvas({
       ask: () => {
-        State.promptContext = State.droppedFile
-          ? { kind: "file", name: State.droppedFile.name, path: State.droppedFile.path }
-          : null;
+        State.promptContext = State.droppedFiles.length > 1
+          ? { kind: "file", name: `${State.droppedFiles.length} files` }
+          : State.droppedFile
+            ? { kind: "file", name: State.droppedFile.name, path: State.droppedFile.path }
+            : null;
         this.setView("prompt");
       },
       cancel: () => this.setView(State.defaultView()),
@@ -372,13 +375,13 @@ export class Island {
       }
       case "drop": {
         State.fileDragOver = false;
-        const path = e.paths?.[0];
-        if (!path) {
+        const paths = [...new Set(e.paths ?? [])];
+        if (paths.length === 0) {
           this.engine.animateMorph(0);
           this.setView(State.defaultView());
           return;
         }
-        this.swallow(path);
+        this.swallow(paths);
         break;
       }
     }
@@ -389,11 +392,16 @@ export class Island {
    * the inbox runs in the background and swaps the path in when it lands, so a
    * slow disk can never stall the animation — same as FileDropHandler on macOS.
    */
-  private swallow(path: string) {
-    const name = path.split(/[\\/]/).pop() || "file";
-    State.droppedFile = { name, path };
-    State.activeDocument = { name, path };
-    State.promptContext = { kind: "file", name, path };
+  private swallow(paths: string[]) {
+    const generation = ++this.dropGeneration;
+    const firstPath = paths[0];
+    const name = paths.length === 1
+      ? firstPath.split(/[\\/]/).pop() || "file"
+      : `${paths.length} files`;
+    State.droppedFile = { name, path: firstPath };
+    State.droppedFiles = [];
+    State.activeDocument = paths.length === 1 ? { name, path: firstPath } : null;
+    State.promptContext = { kind: "file", name, path: firstPath };
     State.chatHistory = [];
     void Bridge.chatReset();
 
@@ -410,13 +418,23 @@ export class Island {
     this.setView("uploading");
     this.ensureRunning();
 
-    void Bridge.ingestFile(path)
-      .then((file) => {
-        State.droppedFile = { name: file.name, path: file.path };
-        State.promptContext = { kind: "file", name: file.name, path: file.path };
+    void Bridge.ingestFiles(paths)
+      .then((files) => {
+        if (generation !== this.dropGeneration) return;
+        State.droppedFiles = files.map(({ name, path }) => ({ name, path }));
+        State.droppedFile = paths.length === 1
+          ? { name: files[0].name, path: files[0].path }
+          : { name: `${files.length} files`, path: files[0].path };
+        State.activeDocument = files.length === 1
+          ? { name: files[0].name, path: files[0].path }
+          : null;
+        State.promptContext = files.length === 1
+          ? { kind: "file", name: files[0].name, path: files[0].path }
+          : { kind: "file", name: `${files.length} files` };
         State.notify();
       })
       .catch((err) => {
+        if (generation !== this.dropGeneration) return;
         UploadSeq.deactivate();
         State.noteMessage = String(err).replace(/^Error:\s*/, "");
         this.engine.animateMorph(0);

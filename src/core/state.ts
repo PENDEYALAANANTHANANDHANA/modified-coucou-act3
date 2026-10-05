@@ -151,6 +151,7 @@ class AppState {
 
   promptContext: PromptContext | null = null;
   droppedFile: { name: string; path: string } | null = null;
+  droppedFiles: { name: string; path: string }[] = [];
   activeDocument: { name: string; path: string } | null = null;
   noteMessage: string | null = null;
   searchResult: SearchResult | null = null;

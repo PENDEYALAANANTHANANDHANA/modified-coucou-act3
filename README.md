@@ -47,7 +47,7 @@ ACT 3 opens the matching GitHub Release so you can download and run the installe
 | Click the small island | It opens |
 | Click Mochi | It gets annoyed. Three times in a row and it goes dizzy |
 | Rest the pointer on Mochi for two seconds | Hearts |
-| Drag a file onto the island | Mochi turns into a box, swallows it, then offers to answer questions about it |
+| Drag up to 20 files into the top-centre panel area | Works even while ACT 3 is tucked away; Mochi copies files from any folder privately, then offers to answer questions about them together |
 | `Esc` | Closes the island |
 | Tray icon | Open, Settings…, Pause, Quit |
 
@@ -112,12 +112,13 @@ The endpoint and model can be changed in provider settings.
 Anthropic chat support has been removed. Claude Code hooks remain a separate
 integration and can be left disabled if you do not use Claude Code.
 
-Drop a PDF or UTF-8 text file onto the island to ask questions about it. ACT 3
-extracts PDF text locally before sending the document context to the selected
-provider, including Ollama. Scanned/image-only PDFs are not supported yet
-because they require OCR. The document stays available as context for follow-up
-questions in the same chat. Documents over 10 MB or 200,000 extracted characters
-are rejected with an explanation.
+Drop up to 20 PDFs or UTF-8 text files at once—from any directory—to ask
+questions across them together. ACT 3 makes private inbox copies, so originals
+are untouched and their location does not matter. Each file is limited to
+10 MB; a drop is limited to 50 MB total and combined extracted context to
+200,000 characters. The documents stay attached for follow-up questions in the
+same chat. Scanned/image-only PDFs are not supported yet because they require
+OCR.
 
 No telemetry. The update checker contacts GitHub only when you request a check;
 chat and integrations connect only to the services you configure yourself.
@@ -156,8 +157,9 @@ ACT-3-Windows-setup.exe          the same file under the rolling name
 ```
 
 The GitHub Release also includes `setup.exe`, a copy of the versioned installer.
-To publish a release, update the version in `Cargo.toml` and
-`src-tauri/tauri.conf.json` to the same value, then push a matching `vX.Y.Z` tag.
+To publish a release, update the version in `Cargo.toml`, `package.json`, and
+`src-tauri/tauri.conf.json` to the same value (and keep their lockfiles in sync),
+then push a matching `vX.Y.Z` tag.
 The GitHub Actions release workflow builds the Windows installer and attaches it
 to a generated GitHub Release. The in-app update check reads that release.
 

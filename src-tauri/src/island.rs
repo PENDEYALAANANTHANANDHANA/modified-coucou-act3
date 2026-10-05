@@ -148,7 +148,8 @@ pub fn screen_info(app: &AppHandle, pref: &str) -> ScreenInfo {
     }
 }
 
-/// Places and sizes the window. `collapsed` picks the wake strip instead of the panel.
+/// Places the window. Windows keeps the full transparent panel as a drop target
+/// while collapsed; click-through still limits ordinary pointer input to the island.
 pub fn apply_geometry(app: &AppHandle, pref: &str, collapsed: bool) {
     let Some(win) = window(app) else { return };
     let Some(m) = target_monitor(app, pref) else { return };
@@ -157,7 +158,16 @@ pub fn apply_geometry(app: &AppHandle, pref: &str, collapsed: bool) {
     let mp = *m.position();
     let ms = *m.size();
 
-    let (lw, lh) = if collapsed { (STRIP_W, STRIP_H) } else { (PANEL_W, PANEL_H) };
+    #[cfg(target_os = "windows")]
+    let _ = collapsed;
+    #[cfg(target_os = "windows")]
+    let (lw, lh) = (PANEL_W, PANEL_H);
+    #[cfg(not(target_os = "windows"))]
+    let (lw, lh) = if collapsed {
+        (STRIP_W, STRIP_H)
+    } else {
+        (PANEL_W, PANEL_H)
+    };
     let pw = (lw * scale).round().max(1.0) as u32;
     let ph = (lh * scale).round().max(1.0) as u32;
     let x = mp.x + (ms.width as i32 - pw as i32) / 2;

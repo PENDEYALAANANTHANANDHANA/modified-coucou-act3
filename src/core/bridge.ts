@@ -110,6 +110,8 @@ export const Bridge = {
   systemIdleSeconds: () => callOrThrow<number>("system_idle_seconds"),
   /** Copies a dropped file into the inbox. */
   ingestFile: (path: string) => callOrThrow<DroppedFile>("ingest_file", { path }),
+  /** Copies a batch of dropped files into the inbox. */
+  ingestFiles: (paths: string[]) => callOrThrow<DroppedFile[]>("ingest_files", { paths }),
   /** Only ever tells you whether a key exists — never its value. */
   secretPresent: (key: string) => call<boolean>("secret_present", { key }),
   secretSet: (key: string, value: string) => callOrThrow<void>("secret_set", { key, value }),
@@ -130,6 +132,7 @@ export interface IntegrationUpdate {
 
 export type ChatContext =
   | { kind: "file"; name: string; path: string; writePath?: string }
+  | { kind: "files"; files: Array<Pick<DroppedFile, "name" | "path">> }
   | { kind: "window"; appName: string; title: string; url?: string };
 
 export interface DroppedFile {

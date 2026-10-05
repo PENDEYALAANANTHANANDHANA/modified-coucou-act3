@@ -94,15 +94,18 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     State.notify();
     onHeightChange();
 
+    const files = State.droppedFiles;
     const file = State.droppedFile;
     const writeToActiveFile = Boolean(
       active && /\b(?:write|type|put|draft|compose|add|replace|update)\b/i.test(query) &&
       /\b(?:in|into)\s+(?:that|this|the)\s+(?:notepad|file|document|note)\b/i.test(query),
     );
-    const context: ChatContext | null = file
+    const context: ChatContext | null = files.length > 1
+      ? { kind: "files", files }
+      : file
       ? { kind: "file", name: file.name, path: file.path, ...(writeToActiveFile && active ? { writePath: active.path } : {}) }
       : writeToActiveFile && active
-        ? { kind: "file", name: active.name, path: active.path, writePath: active.path }
+      ? { kind: "file", name: active.name, path: active.path, writePath: active.path }
       : null;
 
     try {
@@ -147,7 +150,9 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
         appliedPrefill = true;
       }
       const file = State.droppedFile;
-      const wantChip = State.activeDocument?.name ?? file?.name ?? "";
+      const wantChip = State.droppedFiles.length > 1
+        ? `${State.droppedFiles.length} documents`
+        : State.activeDocument?.name ?? file?.name ?? "";
       if (chipRow.dataset.label !== wantChip) {
         chipRow.dataset.label = wantChip;
         clear(chipRow);
