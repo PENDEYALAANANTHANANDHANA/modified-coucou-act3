@@ -824,9 +824,65 @@ input[type="range"]::-webkit-slider-thumb {
 .reply {
   font: 400 12.5px var(--font);
   color: #b0b5be;
-  white-space: pre-wrap;
   padding-right: 8px;
   user-select: text;
+  overflow-wrap: anywhere;
+}
+
+.reply p,
+.reply h1,
+.reply h2,
+.reply h3,
+.reply h4,
+.reply h5,
+.reply h6,
+.reply blockquote,
+.reply pre,
+.reply ul,
+.reply ol {
+  margin: 0 0 6px;
+}
+
+.reply :last-child {
+  margin-bottom: 0;
+}
+
+.reply h1,
+.reply h2,
+.reply h3,
+.reply h4,
+.reply h5,
+.reply h6 {
+  color: var(--ink-2);
+  font-size: 1em;
+  font-weight: 650;
+}
+
+.reply ul,
+.reply ol {
+  padding-left: 18px;
+}
+
+.reply blockquote {
+  border-left: 2px solid rgba(255, 255, 255, 0.24);
+  padding-left: 8px;
+  color: var(--dim);
+}
+
+.reply pre {
+  overflow-x: auto;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.reply code {
+  font: 11px ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: var(--ink-2);
+}
+
+.reply a {
+  color: #a5b4fc;
 }
 
 .typing {

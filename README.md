@@ -84,14 +84,32 @@ It works from any terminal — Windows Terminal, PowerShell, VS Code, Git Bash.
 
 ## Chat and keys
 
-**Settings… → AI provider** selects the chat provider and model.
-OpenAI-compatible and OpenRouter keys live in the **Windows Credential Manager**,
-never on disk or in the interface; local Ollama does not require a key.
+**Settings… → AI provider** selects the chat provider and model. OpenAI-compatible,
+OpenRouter, and OmniRoute keys live in the **Windows Credential Manager**, never
+in settings files; local Ollama does not require a key. For a local OmniRoute
+server, use its API key and the default endpoint `http://localhost:20128/v1`.
+The endpoint and model can be changed in provider settings.
 Anthropic chat support has been removed. Claude Code hooks remain a separate
 integration and can be left disabled if you do not use Claude Code.
 
+Drop a PDF or UTF-8 text file onto the island to ask questions about it. ACT 3
+extracts PDF text locally before sending the document context to the selected
+provider, including Ollama. Scanned/image-only PDFs are not supported yet
+because they require OCR. The document stays available as context for follow-up
+questions in the same chat. Documents over 10 MB or 200,000 extracted characters
+are rejected with an explanation.
+
 No telemetry. The update checker contacts GitHub only when you request a check;
 chat and integrations connect only to the services you configure yourself.
+
+### AI friend mode
+
+Enable **Settings → General → AI friend mode → Random hellos** to let ACT 3
+occasionally ask your selected provider to write a short greeting. The internal
+prompt is never shown as a user message; only the model's greeting appears in
+chat. It is off by default, waits for five minutes without keyboard or mouse
+input, opens chat only while the island is hidden, and respects the configurable
+local quiet hours and random interval. Requires a working provider connection.
 
 ## Build it yourself
 

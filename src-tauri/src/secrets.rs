@@ -10,6 +10,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "anthropic-api-key",
     "online-api-key",
     "openrouter-api-key",
+    "omniroute-api-key",
     "n8n-url",
     "n8n-api-key",
     "vercel-token",

@@ -164,6 +164,10 @@ pub fn left_button_down() -> bool {
     false
 }
 
+pub fn system_idle_seconds() -> Result<u64, String> {
+    Err("AI friend mode currently requires Windows system idle detection.".into())
+}
+
 // ── Island window ─────────────────────────────────────────────────────────────
 
 /// The few gtk-layer-shell calls we need, straight from the C library.

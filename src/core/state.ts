@@ -84,15 +84,21 @@ export interface Settings {
   soundVolume: number;
   autoCloseInterval: number;
   absenceInterval: number;
+  friendModeEnabled: boolean;
+  friendModeMinMinutes: number;
+  friendModeMaxMinutes: number;
+  friendModeQuietStartHour: number;
+  friendModeQuietEndHour: number;
   activeIntegrations: string[];
   screen: "primary" | "cursor";
   autostart: boolean;
   hooksInstalled: boolean;
   /** Selected model used by the active provider. */
   model: string;
-  provider: "online" | "openrouter" | "ollama";
+  provider: "online" | "openrouter" | "omniroute" | "ollama";
   onlineBaseUrl: string;
   openrouterBaseUrl: string;
+  omnirouteBaseUrl: string;
   ollamaUrl: string;
 }
 
@@ -101,6 +107,11 @@ export const DEFAULT_SETTINGS: Settings = {
   soundVolume: 0.12,
   autoCloseInterval: 15,
   absenceInterval: 180,
+  friendModeEnabled: false,
+  friendModeMinMinutes: 30,
+  friendModeMaxMinutes: 90,
+  friendModeQuietStartHour: 22,
+  friendModeQuietEndHour: 8,
   activeIntegrations: [
     "integration_resend", "integration_github",
   ],
@@ -111,6 +122,7 @@ export const DEFAULT_SETTINGS: Settings = {
   provider: "openrouter",
   onlineBaseUrl: "https://api.openai.com/v1",
   openrouterBaseUrl: "https://openrouter.ai/api/v1",
+  omnirouteBaseUrl: "http://localhost:20128/v1",
   ollamaUrl: "http://127.0.0.1:11434",
 };
 

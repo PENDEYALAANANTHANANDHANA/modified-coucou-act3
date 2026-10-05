@@ -87,6 +87,11 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) {
     let _ = app.emit("settings-changed", settings);
 }
 
+#[tauri::command]
+fn system_idle_seconds() -> Result<u64, String> {
+    platform::system_idle_seconds()
+}
+
 /// Hidden island → shrink the window to the invisible wake strip and park the
 /// cursor poll; anything else → full panel and 60 Hz polling.
 #[tauri::command]
@@ -321,6 +326,7 @@ struct ProviderStatus {
     ollama_models: Vec<String>,
     openai_key: bool,
     openrouter_key: bool,
+    omniroute_key: bool,
 }
 
 #[tauri::command]
@@ -336,6 +342,7 @@ async fn provider_status(shared: State<'_, Shared>) -> Result<ProviderStatus, St
         ollama_models,
         openai_key: secrets::present("online-api-key"),
         openrouter_key: secrets::present("openrouter-api-key"),
+        omniroute_key: secrets::present("omniroute-api-key"),
     })
 }
 
@@ -508,6 +515,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             boot,
             save_settings,
+            system_idle_seconds,
             set_collapsed,
             set_island_rect,
             focus_window,

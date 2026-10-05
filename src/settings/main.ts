@@ -252,12 +252,13 @@ function apiSection(): HTMLElement {
 
   const openaiBadge = keyBadge(false, "OpenAI-compatible");
   const openrouterBadge = keyBadge(false, "OpenRouter");
+  const omnirouteBadge = keyBadge(false, "OmniRoute");
 
   const onlineStatusCard = h(
     "div",
     { style: "background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px" },
     h("div", { style: "font:600 12px var(--font);color:var(--ink)" }, h("span", { text: "Online provider key status" })),
-    h("div", { style: "display:flex;flex-wrap:wrap;gap:6px" }, openaiBadge, openrouterBadge),
+    h("div", { style: "display:flex;flex-wrap:wrap;gap:6px" }, openaiBadge, openrouterBadge, omnirouteBadge),
   );
 
   // ── Refresh all provider status ─────────────────────────────────────────
@@ -274,7 +275,8 @@ function apiSection(): HTMLElement {
       const isActive = s.ollama.startsWith("Active");
       ollamaActiveDot.style.background = isActive ? "#22c55e" : "#f4505e";
       const selectedKeyPresent = settings.provider === "ollama"
-        || (settings.provider === "openrouter" ? s.openrouterKey : s.openaiKey);
+        || (settings.provider === "openrouter" ? s.openrouterKey
+          : settings.provider === "omniroute" ? s.omnirouteKey : s.openaiKey);
       dot.style.background = selectedKeyPresent ? "#22c55e" : "#f4505e";
       ollamaActiveLabel.textContent = s.ollama;
       ollamaActiveLabel.style.color = "";
@@ -286,6 +288,7 @@ function apiSection(): HTMLElement {
       ollamaModelCount.textContent = countMatch ? countMatch[1] : "—";
       updateBadge(openaiBadge, s.openaiKey, "OpenAI-compatible");
       updateBadge(openrouterBadge, s.openrouterKey, "OpenRouter");
+      updateBadge(omnirouteBadge, s.omnirouteKey, "OmniRoute");
     } catch (err) {
       ollamaActiveDot.style.background = "#f4505e";
       ollamaActiveLabel.textContent = `Status unavailable: ${String(err).replace(/^Error:\s*/, "")}`;
@@ -324,17 +327,20 @@ function apiSection(): HTMLElement {
   provider.append(
     h("option", { value: "online", text: "OpenAI-compatible online" }),
     h("option", { value: "openrouter", text: "OpenRouter" }),
+    h("option", { value: "omniroute", text: "OmniRoute" }),
     h("option", { value: "ollama", text: "Ollama local" }),
   );
   provider.value = settings.provider;
   const endpointValue = () => settings.provider === "ollama"
     ? settings.ollamaUrl
-    : settings.provider === "openrouter" ? settings.openrouterBaseUrl : settings.onlineBaseUrl;
+    : settings.provider === "openrouter" ? settings.openrouterBaseUrl
+      : settings.provider === "omniroute" ? settings.omnirouteBaseUrl : settings.onlineBaseUrl;
   const providerTabs = h("div", { class: "row" }, h("label", { text: "Provider" }));
   const tabButtons: HTMLButtonElement[] = [];
   for (const [value, label] of [
     ["online", "OpenAI-compatible"],
     ["openrouter", "OpenRouter"],
+    ["omniroute", "OmniRoute"],
     ["ollama", "Ollama"],
   ] as const) {
     const tab = h("button", {
@@ -352,7 +358,9 @@ function apiSection(): HTMLElement {
   }
   const endpoint = h("input", {
     value: endpointValue(),
-    placeholder: settings.provider === "ollama" ? "http://127.0.0.1:11434" : settings.provider === "openrouter" ? "https://openrouter.ai/api/v1" : "https://api.openai.com/v1",
+    placeholder: settings.provider === "ollama" ? "http://127.0.0.1:11434"
+      : settings.provider === "openrouter" ? "https://openrouter.ai/api/v1"
+        : settings.provider === "omniroute" ? "http://localhost:20128/v1" : "https://api.openai.com/v1",
     style: "flex:1 1 auto;min-width:0",
   }) as HTMLInputElement;
   const modelOptions = h("datalist", { id: "provider-model-options" });
@@ -375,10 +383,11 @@ function apiSection(): HTMLElement {
     ollamaSelectedModel.textContent = settings.model;
   }
   updateModelOptions();
+  const keyName = () => settings.provider === "openrouter" ? "openrouter-api-key"
+    : settings.provider === "omniroute" ? "omniroute-api-key" : "online-api-key";
 
   async function refresh() {
-    const keyName = settings.provider === "openrouter" ? "openrouter-api-key" : "online-api-key";
-    const present = settings.provider === "ollama" || ((await Bridge.secretPresent(keyName)) ?? false);
+    const present = settings.provider === "ollama" || ((await Bridge.secretPresent(keyName())) ?? false);
     dot.style.background = present ? "#22c55e" : "#f4505e";
     state.textContent = settings.provider === "ollama"
       ? "Ollama does not require an API key."
@@ -400,8 +409,7 @@ function apiSection(): HTMLElement {
     if (!value) return;
     clear(feedback);
     try {
-      const keyName = settings.provider === "openrouter" ? "openrouter-api-key" : "online-api-key";
-      await Bridge.secretSet(keyName, value);
+      await Bridge.secretSet(keyName(), value);
       field.value = "";
       feedback.append(h("div", { class: "notice ok", text: "Saved. It never touches disk." }));
       await refresh();
@@ -414,8 +422,7 @@ function apiSection(): HTMLElement {
   clearBtn.addEventListener("click", async () => {
     clear(feedback);
     try {
-      const keyName = settings.provider === "openrouter" ? "openrouter-api-key" : "online-api-key";
-      await Bridge.secretClear(keyName);
+      await Bridge.secretClear(keyName());
       feedback.append(h("div", { class: "notice ok", text: "Key removed." }));
       await refresh();
       await refreshAllStatus();
@@ -443,7 +450,8 @@ function apiSection(): HTMLElement {
     endpoint.value = endpointValue();
     endpoint.placeholder = settings.provider === "ollama"
       ? "http://127.0.0.1:11434"
-      : settings.provider === "openrouter" ? "https://openrouter.ai/api/v1" : "https://api.openai.com/v1";
+      : settings.provider === "openrouter" ? "https://openrouter.ai/api/v1"
+        : settings.provider === "omniroute" ? "http://localhost:20128/v1" : "https://api.openai.com/v1";
     field.style.display = settings.provider === "ollama" ? "none" : "";
     saveBtn.style.display = settings.provider === "ollama" ? "none" : "";
     clearBtn.style.display = settings.provider === "ollama" ? "none" : "";
@@ -455,6 +463,7 @@ function apiSection(): HTMLElement {
   endpoint.addEventListener("change", async () => {
     if (settings.provider === "ollama") settings.ollamaUrl = endpoint.value.trim();
     else if (settings.provider === "openrouter") settings.openrouterBaseUrl = endpoint.value.trim();
+    else if (settings.provider === "omniroute") settings.omnirouteBaseUrl = endpoint.value.trim();
     else settings.onlineBaseUrl = endpoint.value.trim();
     if (settings.provider === "ollama") ollamaEndpoint.textContent = settings.ollamaUrl;
     await save();
@@ -699,6 +708,67 @@ function generalSection(): HTMLElement {
     void save();
   });
 
+  const friendSchedule = h("div", { class: "row" });
+  const friendQuietHours = h("div", { class: "row" });
+  const friendStatus = h("span", { class: "hint", text: settings.friendModeEnabled ? "on" : "off" });
+  const updateFriendControls = () => {
+    for (const control of [friendMin, friendMax, quietStart, quietEnd]) {
+      control.disabled = !settings.friendModeEnabled;
+    }
+    friendSchedule.style.opacity = settings.friendModeEnabled ? "1" : "0.45";
+    friendQuietHours.style.opacity = settings.friendModeEnabled ? "1" : "0.45";
+  };
+  const friendMin = h("input", {
+    type: "number", min: "15", max: "1440", step: "15",
+    value: String(settings.friendModeMinMinutes), style: "width:76px",
+  }) as HTMLInputElement;
+  const friendMax = h("input", {
+    type: "number", min: "15", max: "1440", step: "15",
+    value: String(settings.friendModeMaxMinutes), style: "width:76px",
+  }) as HTMLInputElement;
+  const quietStart = h("input", {
+    type: "number", min: "0", max: "23", step: "1",
+    value: String(settings.friendModeQuietStartHour), style: "width:64px",
+  }) as HTMLInputElement;
+  const quietEnd = h("input", {
+    type: "number", min: "0", max: "23", step: "1",
+    value: String(settings.friendModeQuietEndHour), style: "width:64px",
+  }) as HTMLInputElement;
+  friendSchedule.append(
+    h("label", { text: "Random hello every" }),
+    friendMin,
+    h("span", { class: "hint", text: "to" }),
+    friendMax,
+    h("span", { class: "hint", text: "minutes" }),
+  );
+  friendQuietHours.append(
+    h("label", { text: "Quiet hours" }),
+    quietStart,
+    h("span", { class: "hint", text: "to" }),
+    quietEnd,
+    h("span", { class: "hint", text: "(local time)" }),
+  );
+  const updateFriendRange = () => {
+    const min = Math.max(15, Math.min(1440, Number(friendMin.value) || 30));
+    const max = Math.max(min, Math.min(1440, Number(friendMax.value) || 90));
+    settings.friendModeMinMinutes = min;
+    settings.friendModeMaxMinutes = max;
+    friendMin.value = String(min);
+    friendMax.value = String(max);
+    void save();
+  };
+  friendMin.addEventListener("change", updateFriendRange);
+  friendMax.addEventListener("change", updateFriendRange);
+  const updateQuietHours = () => {
+    settings.friendModeQuietStartHour = Math.max(0, Math.min(23, Number(quietStart.value) || 0));
+    settings.friendModeQuietEndHour = Math.max(0, Math.min(23, Number(quietEnd.value) || 0));
+    quietStart.value = String(settings.friendModeQuietStartHour);
+    quietEnd.value = String(settings.friendModeQuietEndHour);
+    void save();
+  };
+  quietStart.addEventListener("change", updateQuietHours);
+  quietEnd.addEventListener("change", updateQuietHours);
+
   return h(
     "section",
     {},
@@ -721,6 +791,20 @@ function generalSection(): HTMLElement {
       h("label", { text: "Launch at startup" }),
       toggle(settings.autostart, (v) => { settings.autostart = v; void save(); }),
     ),
+    h("h3", { text: "AI friend mode" }),
+    h("div", { class: "hint", text: "ACT 3 can occasionally ask your chosen model for a short hello and show only its reply in chat. It waits until you have been away from your computer for 5 minutes, keeps the prompt private, and only opens the chat when the island is hidden." }),
+    h("div", { class: "row" },
+      h("label", { text: "Random hellos" }),
+      toggle(settings.friendModeEnabled, (enabled) => {
+        settings.friendModeEnabled = enabled;
+        friendStatus.textContent = enabled ? "on" : "off";
+        updateFriendControls();
+        void save();
+      }),
+      friendStatus,
+    ),
+    friendSchedule,
+    friendQuietHours,
   );
 }
 

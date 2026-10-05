@@ -7,6 +7,7 @@ import { State, type Settings } from "./core/state";
 import { Island } from "./island/island";
 import { registerHookHandlers } from "./island/hooks";
 import { registerIntegrationHandlers, refreshConfigured } from "./island/integrations";
+import { FriendMode } from "./core/friend-mode";
 
 async function main() {
   const root = document.getElementById("root");
@@ -15,6 +16,7 @@ async function main() {
   void Sound.preload();
 
   const island = new Island(root);
+  const friendMode = new FriendMode(island);
 
   const boot = await Bridge.boot();
   if (boot) {
@@ -59,12 +61,14 @@ async function main() {
     island.applySettings();
     State.loadIntegrationTasks();
     void refreshConfigured();
+    friendMode.refresh();
   });
 
   registerHookHandlers(island);
   registerIntegrationHandlers(island);
 
   island.launch();
+  friendMode.refresh();
 
   // In a plain browser there is no wake strip behind the cursor: make the whole
   // page wake the island so the visuals can be checked with `npm run dev`.

@@ -7,6 +7,7 @@ import { Bridge, type ChatContext } from "../core/bridge";
 import { Sound } from "../core/sound";
 import { State, type ChatMessage } from "../core/state";
 import type { ViewHost } from "./views";
+import { appendMarkdown } from "./markdown";
 
 let nextId = 1;
 
@@ -18,7 +19,9 @@ function bubble(message: ChatMessage): HTMLElement {
       h("div", { class: "bubble", text: message.content }),
     );
   }
-  return h("div", { class: "chat-row" }, h("div", { class: "reply", text: message.content }));
+  const reply = h("div", { class: "reply" });
+  appendMarkdown(reply, message.content);
+  return h("div", { class: "chat-row" }, reply);
 }
 
 function typingDots(): HTMLElement {
@@ -72,8 +75,9 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     onHeightChange();
 
     const file = State.droppedFile;
-    const context: ChatContext | null =
-      State.chatHistory.length === 1 && file ? { kind: "file", name: file.name, path: file.path } : null;
+    const context: ChatContext | null = file
+      ? { kind: "file", name: file.name, path: file.path }
+      : null;
 
     try {
       const reply = await Bridge.chatSend(query, context);

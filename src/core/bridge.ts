@@ -100,6 +100,8 @@ export const Bridge = {
     callOrThrow<string>("test_provider", provider ? { provider } : undefined),
   providerStatus: () => callOrThrow<ProviderStatus>("provider_status"),
   checkForUpdate: () => callOrThrow<UpdateStatus>("check_for_update"),
+  /** Seconds since the last mouse or keyboard input on this device. */
+  systemIdleSeconds: () => callOrThrow<number>("system_idle_seconds"),
   /** Copies a dropped file into the inbox. */
   ingestFile: (path: string) => callOrThrow<DroppedFile>("ingest_file", { path }),
   /** Only ever tells you whether a key exists — never its value. */
@@ -149,6 +151,7 @@ export interface ProviderStatus {
   ollamaModels: string[];
   openaiKey: boolean;
   openrouterKey: boolean;
+  omnirouteKey: boolean;
 }
 
 export interface UpdateStatus {

@@ -11,9 +11,11 @@ use ::windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, HWND, LPARAM, Lo
 use ::windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use ::windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
 use ::windows::Win32::System::Ole::RevokeDragDrop;
-use ::windows::Win32::System::SystemInformation::GetLocalTime;
+use ::windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount};
 use ::windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-use ::windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+use ::windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, GetLastInputInfo, LASTINPUTINFO, VK_LBUTTON,
+};
 use ::windows::Win32::UI::WindowsAndMessaging::{
     EnumChildWindows, GetClassNameW, GetCursorPos, GetWindowLongPtrW, SetWindowLongPtrW,
     GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
@@ -165,6 +167,19 @@ pub fn cursor_physical() -> Option<(f64, f64)> {
 /// drag might be in flight before it reaches the window.
 pub fn left_button_down() -> bool {
     unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 }
+}
+
+/// Seconds since the user's last keyboard or mouse input across Windows.
+pub fn system_idle_seconds() -> Result<u64, String> {
+    let mut info = LASTINPUTINFO {
+        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    unsafe { GetLastInputInfo(&mut info) }
+        .ok()
+        .map_err(|error| format!("Could not read Windows idle time: {error}"))?;
+    let elapsed_ms = unsafe { GetTickCount() }.wrapping_sub(info.dwTime);
+    Ok(u64::from(elapsed_ms / 1000))
 }
 
 // ── Island window ─────────────────────────────────────────────────────────────
