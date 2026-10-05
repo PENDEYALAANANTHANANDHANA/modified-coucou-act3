@@ -133,6 +133,19 @@ fn open_url(url: String) {
     platform::open_url(&url);
 }
 
+#[tauri::command]
+fn open_local_path(path: String) -> Result<(), String> {
+    let candidate = std::path::Path::new(&path);
+    if !candidate.is_absolute() {
+        return Err("Only an absolute local path can be opened.".into());
+    }
+    if !candidate.exists() {
+        return Err("That local file or folder does not exist.".into());
+    }
+    platform::reveal_path(&path);
+    Ok(())
+}
+
 /// "Open terminal" opens the working folder in VS Code when `code` is on PATH,
 /// and falls back to the file manager otherwise.
 #[tauri::command]
@@ -432,6 +445,7 @@ pub fn run() {
             focus_window,
             reposition,
             open_url,
+            open_local_path,
             open_in_vscode,
             quit_app,
             hooks_status,

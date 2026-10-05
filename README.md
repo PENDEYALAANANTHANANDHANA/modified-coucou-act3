@@ -51,6 +51,15 @@ Everything else happens on its own: a Claude Code permission request opens the
 island with **Deny / Allow**, a finished session shows what it did, and
 your integrations sit in the coloured pills next to Mochi.
 
+### Simple tasks
+
+Open the **Tools** tab and enter one bounded task. ACT 3 supports opening a URL
+or web search, opening an existing local file or folder, copying text, starting
+a focus timer, and setting a reminder. Creating a new text note always requires
+an explicit confirmation and refuses to overwrite an existing file. Arbitrary
+commands, deletion, credentials, and hidden background actions are not
+supported.
+
 ## Claude Code
 
 <img src="screenshots/settings.png" width="562" alt="The settings window">

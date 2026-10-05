@@ -12,6 +12,7 @@ import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
 import { Bridge } from "../core/bridge";
+import { executeTask, parseTask, TASK_HELP } from "../tools/task-runner";
 
 export interface ViewActions {
   setView(v: IslandViewName): void;
@@ -494,6 +495,7 @@ function buildTools(actions: ViewActions): ViewHost {
   const timerButtons = h("div", { class: "tool-actions" });
   let timerSeconds = Number(localStorage.getItem("act3.focusSeconds") ?? 1500);
   let timerRunning = false;
+  let lastTimerTick = performance.now();
   const renderTimer = () => {
     timerLabel.textContent = `${String(Math.floor(timerSeconds / 60)).padStart(2, "0")}:${String(timerSeconds % 60).padStart(2, "0")}`;
     timerStatus.textContent = timerRunning ? "Focus timer running" : timerSeconds < 1500 ? "Focus timer paused" : "Focus timer ready";
@@ -516,6 +518,39 @@ function buildTools(actions: ViewActions): ViewHost {
     if ("Notification" in window && Notification.permission === "default") await Notification.requestPermission();
     alarmInput.value = "";
     renderAlarms();
+  });
+  const taskInput = h("input", {
+    class: "tool-input",
+    placeholder: "Try: start focus timer 25 minutes",
+  }) as HTMLInputElement;
+  const taskStatus = h("div", { class: "tool-muted", text: TASK_HELP });
+  const taskConfirm = h("input", { type: "checkbox" }) as HTMLInputElement;
+  const runTask = btn("Run task", "primary", async () => {
+    const plan = parseTask(taskInput.value);
+    if (!plan) {
+      taskStatus.textContent = `I couldn't match that to a safe task. ${TASK_HELP}`;
+      return;
+    }
+    taskStatus.textContent = "Working…";
+    const result = await executeTask(plan, {
+      startFocusTimer(seconds) {
+        timerSeconds = seconds;
+        timerRunning = true;
+        lastTimerTick = performance.now();
+        localStorage.setItem("act3.focusSeconds", String(timerSeconds));
+        renderTimer();
+      },
+      addReminder(at, label) {
+        alarms.push({ at, label });
+        localStorage.setItem("act3.alarms", JSON.stringify(alarms));
+        if ("Notification" in window && Notification.permission === "default") {
+          void Notification.requestPermission();
+        }
+        renderAlarms();
+      },
+    }, taskConfirm.checked);
+    taskStatus.textContent = result.message;
+    if (result.ok || !result.needsConfirmation) taskConfirm.checked = false;
   });
   const rootInput = h("input", { class: "tool-input", placeholder: "Folder root, e.g. C:\\Users\\you\\Documents" }) as HTMLInputElement;
   const fileQuery = h("input", { class: "tool-input", placeholder: "File name contains…" }) as HTMLInputElement;
@@ -551,6 +586,12 @@ function buildTools(actions: ViewActions): ViewHost {
   });
   const el = h("div", { class: "view tools-view" },
     card("indigo", h("div", { class: "tool-grid" },
+      h("div", { class: "tool-section task-runner" },
+        h("div", { class: "tool-title", text: "Simple task runner" }),
+        h("div", { class: "tool-row" }, taskInput, runTask),
+        h("div", { class: "tool-row" }, taskConfirm, h("span", { class: "tool-muted", text: "I confirm creating a new note" })),
+        taskStatus,
+      ),
       h("div", { class: "tool-section" }, h("div", { class: "tool-title", text: "Search" }), h("div", { class: "tool-row" }, search, youtube, web)),
       h("div", { class: "tool-section" }, writing),
       h("div", { class: "tool-section timer-section" }, timerLabel, timerStatus, timerButtons),
@@ -570,11 +611,16 @@ function buildTools(actions: ViewActions): ViewHost {
   return {
     el,
     sync() {
+      const nowMs = performance.now();
       if (timerRunning && timerSeconds > 0) {
-        timerSeconds -= 1;
-        localStorage.setItem("act3.focusSeconds", String(timerSeconds));
-        if (timerSeconds === 0) { timerRunning = false; timerStatus.textContent = "Focus complete"; }
-        renderTimer();
+        const elapsed = Math.floor((nowMs - lastTimerTick) / 1000);
+        if (elapsed > 0) {
+          timerSeconds = Math.max(0, timerSeconds - elapsed);
+          lastTimerTick += elapsed * 1000;
+          localStorage.setItem("act3.focusSeconds", String(timerSeconds));
+          if (timerSeconds === 0) { timerRunning = false; timerStatus.textContent = "Focus complete"; }
+          renderTimer();
+        }
       }
       const now = Date.now();
       for (let i = alarms.length - 1; i >= 0; i--) {
