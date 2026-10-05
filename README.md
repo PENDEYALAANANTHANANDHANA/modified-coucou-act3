@@ -93,10 +93,9 @@ You need [Rust](https://rustup.rs), [Node 20+](https://nodejs.org), and the
 C++"). WebView2 ships with Windows 10/11.
 
 ```powershell
-cd windows
 npm install
 npm run tauri dev      # live-reloading development build
-npm run pack           # builds the installer and drops it in windows/release/
+npm run pack           # builds the installer and drops it in release/
 ```
 
 `npm run dev` alone serves the front end in an ordinary browser, which is enough
@@ -104,17 +103,18 @@ to work on the island's looks. It also serves `dev/upload-preview.html`, which
 replays the whole file-drop choreography on a loop — the one part of the UI that
 otherwise needs a real drag from Explorer to see. Neither page ships in the app.
 
-`npm run pack` leaves two files in `windows/release/`, the same names the release
+`npm run pack` leaves two files in `release/`, the same names the release
 workflow publishes:
 
 ```
-Coucou-Windows-X.Y.Z-setup.exe    the versioned installer
-Coucou-Windows-setup.exe          the same file under the rolling name
+ACT-3-Windows-X.Y.Z-setup.exe    the versioned installer
+ACT-3-Windows-setup.exe          the same file under the rolling name
 ```
 
-Installing is optional — `target/release/coucou.exe` runs on its own. There is no
-window in the taskbar and no console: the island at the top of the screen and the
-Mochi in the notification area are the whole app, and Quit lives in its menu.
+The installer adds an **ACT 3** shortcut to the Windows Start menu. Installing is
+optional — `target/release/act3.exe` runs on its own. There is no window in the
+taskbar and no console: the island at the top of the screen and the Mochi in the
+notification area are the whole app, and Quit lives in its menu.
 
 The 28 sounds are the macOS app's own files; they are never duplicated in this
 folder. The path is declared once, in `SOUNDS_DIR` at the top of
