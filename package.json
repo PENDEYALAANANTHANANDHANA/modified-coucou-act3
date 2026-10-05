@@ -7,6 +7,7 @@
     "dev": "vite --config vite.config.ts",
     "build": "tsc --noEmit && vite build --config vite.config.ts",
     "preview": "vite preview --config vite.config.ts",
+    "act3": "tauri dev",
     "icons": "node scripts/gen-icons.mjs",
     "tauri": "tauri",
     "predev": "cargo build --release -p act3-hook",

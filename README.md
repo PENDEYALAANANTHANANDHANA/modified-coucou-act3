@@ -119,7 +119,7 @@ C++"). WebView2 ships with Windows 10/11.
 
 ```powershell
 npm install
-npm run tauri dev      # live-reloading development build
+npm run act3           # live-reloading development build, no installer needed
 npm run pack           # builds the installer and drops it in release/
 ```
 
