@@ -11,7 +11,7 @@ import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
-import { Bridge } from "../core/bridge";
+import { Bridge, type CodeProposal } from "../core/bridge";
 import { Sound } from "../core/sound";
 import { executeTask, parseTask, TASK_HELP } from "../tools/task-runner";
 
@@ -528,36 +528,50 @@ function buildTools(actions: ViewActions): ViewHost {
   });
   const taskInput = h("input", {
     class: "tool-input",
-    placeholder: "Try: start focus timer 25 minutes",
+    placeholder: "Try: make a text file on desktop",
   }) as HTMLInputElement;
   const taskStatus = h("div", { class: "tool-muted", text: TASK_HELP });
-  const taskConfirm = h("input", { type: "checkbox" }) as HTMLInputElement;
   const runTask = btn("Run task", "primary", async () => {
     const plan = parseTask(taskInput.value);
     if (!plan) {
       taskStatus.textContent = `I couldn't match that to a safe task. ${TASK_HELP}`;
       return;
     }
+    runTask.disabled = true;
     taskStatus.textContent = "Working…";
-    const result = await executeTask(plan, {
-      startFocusTimer(seconds) {
-        timerSeconds = seconds;
-        timerRunning = true;
-        lastTimerTick = performance.now();
-        localStorage.setItem("act3.focusSeconds", String(timerSeconds));
-        renderTimer();
-      },
-      addReminder(at, label) {
-        alarms.push({ at, label });
-        localStorage.setItem("act3.alarms", JSON.stringify(alarms));
-        if ("Notification" in window && Notification.permission === "default") {
-          void Notification.requestPermission();
-        }
-        renderAlarms();
-      },
-    }, taskConfirm.checked);
-    taskStatus.textContent = result.message;
-    if (result.ok || !result.needsConfirmation) taskConfirm.checked = false;
+    try {
+      const result = await executeTask(plan, {
+        startFocusTimer(seconds) {
+          timerSeconds = seconds;
+          timerRunning = true;
+          lastTimerTick = performance.now();
+          localStorage.setItem("act3.focusSeconds", String(timerSeconds));
+          renderTimer();
+        },
+        addReminder(at, label) {
+          alarms.push({ at, label });
+          localStorage.setItem("act3.alarms", JSON.stringify(alarms));
+          if ("Notification" in window && Notification.permission === "default") {
+            void Notification.requestPermission();
+          }
+          renderAlarms();
+        },
+        currentFile: () => State.activeDocument,
+        setActiveFile(file) {
+          State.activeDocument = file;
+          State.notify();
+        },
+      });
+      taskStatus.textContent = result.message;
+    } finally {
+      runTask.disabled = false;
+    }
+  }) as HTMLButtonElement;
+  taskInput.addEventListener("keydown", (event) => {
+    if ((event as KeyboardEvent).key === "Enter") {
+      event.preventDefault();
+      runTask.click();
+    }
   });
   interface UserTask {
     id: string;
@@ -700,6 +714,142 @@ function buildTools(actions: ViewActions): ViewHost {
   });
   renderUserTasks();
   const rootInput = h("input", { class: "tool-input", placeholder: "Folder root, e.g. C:\\Users\\you\\Documents" }) as HTMLInputElement;
+  const workspaceKey = "act3.workspaceRoot";
+  try {
+    rootInput.value = localStorage.getItem(workspaceKey) ?? "";
+  } catch (error) {
+    console.error("[act3] could not load project folder", error);
+  }
+  const projectPrompt = h("textarea", {
+    class: "tool-textarea code-prompt",
+    placeholder: "Describe the code change you want, e.g. add a dark-mode toggle",
+    maxlength: "4000",
+    rows: "2",
+  }) as HTMLTextAreaElement;
+  const projectStatus = h("div", {
+    class: "tool-muted",
+    text: "Enter a project folder path. ACT 3 sends up to 40 source files (200 KB) to your selected model.",
+  });
+  const projectChanges = h("div", { class: "code-changes" });
+  const autoApply = h("input", { type: "checkbox" }) as HTMLInputElement;
+  const openProject = btn("Open in VS Code", "secondary", async () => {
+    const root = rootInput.value.trim();
+    if (!root) {
+      projectStatus.textContent = "Enter the project folder path first.";
+      return;
+    }
+    try {
+      const opened = await Bridge.openInVSCode(root);
+      projectStatus.textContent = opened
+        ? "Project opened in VS Code."
+        : "VS Code's `code` command was not found. Install/enable the VS Code command-line launcher.";
+    } catch (error) {
+      projectStatus.textContent = String(error).replace(/^Error:\s*/, "");
+      if (currentProposal) {
+        autoApply.checked = false;
+        projectStatus.textContent += " Review the proposal before trying to apply it.";
+        renderCodeProposal(currentProposal);
+      }
+    }
+  });
+  const applyProposal = btn("Apply changes", "primary", async () => {
+    const proposal = currentProposal;
+    const root = currentProposalRoot;
+    if (!proposal || !root) return;
+    applyProposal.disabled = true;
+    try {
+      const paths = await Bridge.applyCodeChanges(root, proposal.changes);
+      currentProposal = null;
+      currentProposalRoot = null;
+      clear(projectChanges);
+      projectStatus.textContent = `Updated ${paths.length} file(s): ${paths.join(", ")}`;
+      try {
+        const opened = await Bridge.openInVSCode(root);
+        if (!opened) projectStatus.textContent += " · VS Code's `code` command was not found.";
+      } catch (error) {
+        projectStatus.textContent += ` · Could not open VS Code: ${String(error).replace(/^Error:\s*/, "")}`;
+      }
+    } catch (error) {
+      projectStatus.textContent = String(error).replace(/^Error:\s*/, "");
+    } finally {
+      applyProposal.disabled = false;
+    }
+  }) as HTMLButtonElement;
+  let currentProposal: CodeProposal | null = null;
+  let currentProposalRoot: string | null = null;
+  function renderCodeProposal(proposal: CodeProposal) {
+    clear(projectChanges);
+    projectChanges.append(h("strong", { class: "tool-label", text: proposal.summary }));
+    for (const change of proposal.changes) {
+      const previous = change.originalContents ?? "(New file)";
+      const details = h("details", { class: "code-change" },
+        h("summary", { text: change.path }),
+        h("div", { class: "code-change-panes" },
+          h("pre", { text: `Before\n${previous}` }),
+          h("pre", { text: `After\n${change.contents}` }),
+        ),
+      );
+      projectChanges.append(details);
+    }
+    applyProposal.hidden = autoApply.checked;
+    if (!autoApply.checked) projectChanges.append(applyProposal);
+  }
+  const generateCode = btn("Generate code", "primary", async () => {
+    const root = rootInput.value.trim();
+    const instructions = projectPrompt.value.trim();
+    if (!root || !instructions) {
+      projectStatus.textContent = "Enter a project folder and describe the code change.";
+      return;
+    }
+    generateCode.disabled = true;
+    applyProposal.disabled = true;
+    currentProposal = null;
+    currentProposalRoot = null;
+    clear(projectChanges);
+    projectStatus.textContent = "Reading project source and asking your selected model…";
+    try {
+      localStorage.setItem(workspaceKey, root);
+      const proposal = await Bridge.generateCodeChanges(root, instructions);
+      currentProposal = proposal;
+      currentProposalRoot = root;
+      if (autoApply.checked) {
+        const paths = await Bridge.applyCodeChanges(root, proposal.changes);
+        currentProposal = null;
+        currentProposalRoot = null;
+        projectStatus.textContent = `Automatically updated ${paths.length} file(s): ${paths.join(", ")}`;
+        try {
+          const opened = await Bridge.openInVSCode(root);
+          if (!opened) projectStatus.textContent += " · VS Code's `code` command was not found.";
+        } catch (error) {
+          projectStatus.textContent += ` · Could not open VS Code: ${String(error).replace(/^Error:\s*/, "")}`;
+        }
+      } else {
+        projectStatus.textContent = "Review the generated files, then choose Apply changes.";
+        renderCodeProposal(proposal);
+      }
+    } catch (error) {
+      projectStatus.textContent = String(error).replace(/^Error:\s*/, "");
+    } finally {
+      generateCode.disabled = false;
+      applyProposal.disabled = false;
+    }
+  }) as HTMLButtonElement;
+  autoApply.addEventListener("change", () => {
+    if (currentProposal) renderCodeProposal(currentProposal);
+  });
+  rootInput.addEventListener("change", () => {
+    try {
+      localStorage.setItem(workspaceKey, rootInput.value.trim());
+      if (currentProposal && rootInput.value.trim() !== currentProposalRoot) {
+        currentProposal = null;
+        currentProposalRoot = null;
+        clear(projectChanges);
+        projectStatus.textContent = "Project folder changed. Generate a fresh proposal for this folder.";
+      }
+    } catch (error) {
+      projectStatus.textContent = `Could not remember project folder: ${String(error).replace(/^Error:\s*/, "")}`;
+    }
+  });
   const fileQuery = h("input", { class: "tool-input", placeholder: "File name contains…" }) as HTMLInputElement;
   const fileStatus = h("div", { class: "tool-muted", text: "Search and read stay inside the selected root." });
   const fileResults = h("div", { class: "file-results" });
@@ -735,8 +885,7 @@ function buildTools(actions: ViewActions): ViewHost {
     card("indigo", h("div", { class: "tool-grid" },
       h("div", { class: "tool-section task-runner" },
         h("div", { class: "tool-title", text: "Quick actions" }),
-        h("div", { class: "tool-row" }, taskInput, runTask),
-        h("div", { class: "tool-row" }, taskConfirm, h("span", { class: "tool-muted", text: "I confirm creating a new note" })),
+        h("div", { class: "tool-row quick-task-row" }, taskInput, runTask),
         taskStatus,
       ),
       h("div", { class: "tool-section task-maker" },
@@ -752,9 +901,17 @@ function buildTools(actions: ViewActions): ViewHost {
       h("div", { class: "tool-section" }, writing),
       h("div", { class: "tool-section timer-section" }, timerLabel, timerStatus, timerButtons),
       h("div", { class: "tool-section" }, h("div", { class: "tool-title", text: "Reminders" }), h("div", { class: "tool-row" }, alarmInput, addAlarm), alarmList),
+      h("div", { class: "tool-section code-agent" },
+        h("div", { class: "tool-title", text: "Code with ACT 3" }),
+        h("div", { class: "tool-muted", text: "Describe a code change; ACT 3 reads a bounded set of source files, generates edits, and can apply them in this project. It never runs commands." }),
+        h("div", { class: "tool-row project-path-row" }, rootInput, openProject),
+        projectPrompt,
+        h("div", { class: "tool-row code-agent-actions" }, autoApply, h("span", { class: "tool-muted", text: "Automatically apply generated edits without review" }), generateCode),
+        projectStatus,
+        projectChanges,
+      ),
       h("div", { class: "tool-section file-tools" },
-        h("div", { class: "tool-title", text: "Safe file tools" }),
-        rootInput,
+        h("div", { class: "tool-title", text: "File tools" }),
         h("div", { class: "tool-row" }, fileQuery, searchFiles),
         fileResults,
         filePath,

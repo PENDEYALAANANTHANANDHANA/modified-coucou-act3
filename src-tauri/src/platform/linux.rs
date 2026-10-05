@@ -134,8 +134,12 @@ pub fn reveal_folder(path: &str) {
     let _ = Command::new("xdg-open").arg(path).spawn();
 }
 
-pub fn reveal_path(path: &str) {
-    reveal_folder(path);
+pub fn reveal_path(path: &str) -> Result<(), String> {
+    std::process::Command::new("xdg-open")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Could not open the selected file: {error}"))
 }
 
 /// Our own `which`: the first executable file named `stem` on $PATH.

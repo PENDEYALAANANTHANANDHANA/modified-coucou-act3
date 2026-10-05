@@ -87,8 +87,12 @@ pub fn reveal_folder(path: &str) {
     let _ = Command::new("explorer").arg(path).spawn();
 }
 
-pub fn reveal_path(path: &str) {
-    reveal_folder(path);
+pub fn reveal_path(path: &str) -> Result<(), String> {
+    no_console(&mut Command::new("explorer.exe"))
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Could not open the selected file: {error}"))
 }
 
 /// Our own `where`: walks %PATH% against %PATHEXT%, no shell involved.

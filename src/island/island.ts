@@ -392,6 +392,7 @@ export class Island {
   private swallow(path: string) {
     const name = path.split(/[\\/]/).pop() || "file";
     State.droppedFile = { name, path };
+    State.activeDocument = { name, path };
     State.promptContext = { kind: "file", name, path };
     State.chatHistory = [];
     void Bridge.chatReset();

@@ -52,9 +52,11 @@ export const Bridge = {
 
   openUrl: (url: string) => call<void>("open_url", { url }),
   openLocalPath: (path: string) => callOrThrow<void>("open_local_path", { path }),
+  createDesktopTextFile: (name?: string) =>
+    callOrThrow<{ name: string; path: string }>("create_desktop_text_file", { name }),
 
   /** "Open terminal" → opens the folder in VS Code when `code` is on PATH. */
-  openInVSCode: (path: string | null) => call<boolean>("open_in_vscode", { path }),
+  openInVSCode: (path: string | null) => callOrThrow<boolean>("open_in_vscode", { path }),
 
   quit: () => call<void>("quit_app"),
 
@@ -84,9 +86,13 @@ export const Bridge = {
   // ── Chat, files, secrets ──────────────────────────────────────────────────
   /** One chat turn. The API key and any file bytes never leave Rust. */
   chatSend: (query: string, context: ChatContext | null) =>
-    callOrThrow<{ text: string }>("chat_send", { query, context }),
+    callOrThrow<ChatReply>("chat_send", { query, context }),
   runCustomTask: (instructions: string) =>
     callOrThrow<{ text: string }>("run_custom_task", { instructions }),
+  generateCodeChanges: (root: string, instructions: string) =>
+    callOrThrow<CodeProposal>("generate_code_changes", { root, instructions }),
+  applyCodeChanges: (root: string, changes: CodeChange[]) =>
+    callOrThrow<string[]>("apply_code_changes", { root, changes }),
   searchFiles: (root: string, query: string) =>
     callOrThrow<FileMatch[]>("search_files", { root, query }),
   readTextFile: (root: string, path: string) =>
@@ -123,7 +129,7 @@ export interface IntegrationUpdate {
 }
 
 export type ChatContext =
-  | { kind: "file"; name: string; path: string }
+  | { kind: "file"; name: string; path: string; writePath?: string }
   | { kind: "window"; appName: string; title: string; url?: string };
 
 export interface DroppedFile {
@@ -132,10 +138,31 @@ export interface DroppedFile {
   size: number;
 }
 
+export interface ActiveDocument {
+  name: string;
+  path: string;
+}
+
+export interface ChatReply {
+  text: string;
+  writtenFile?: string | null;
+}
+
 export interface FileMatch {
   path: string;
   name: string;
   size: number;
+}
+
+export interface CodeChange {
+  path: string;
+  originalContents: string | null;
+  contents: string;
+}
+
+export interface CodeProposal {
+  summary: string;
+  changes: CodeChange[];
 }
 
 export interface HookStatus {

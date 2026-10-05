@@ -3,7 +3,7 @@
 
 import { h, svg, clear } from "./dom";
 import { ICONS } from "./icons";
-import { Bridge, type ChatContext } from "../core/bridge";
+import { Bridge, type ChatContext, type ChatReply } from "../core/bridge";
 import { Sound } from "../core/sound";
 import { State, type ChatMessage } from "../core/state";
 import type { ViewHost } from "./views";
@@ -65,6 +65,26 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   async function submit() {
     const query = input.value.trim();
     if (!query || sending) return;
+    const active = State.activeDocument;
+    if (/^(?:(?:please|can you|could you)\s+)?(?:open|show)\s+(?:this|it|that|the (?:file|document|note))(?:\s+please)?[.!?]*$/i.test(query)) {
+      if (!active) {
+        State.noteMessage = "Drop a file onto ACT 3 first, or create a Desktop note from Tools.";
+        State.view = "note";
+        State.notify();
+        return;
+      }
+      try {
+        await Bridge.openLocalPath(active.path);
+        State.chatHistory.push({ id: nextId++, role: "assistant", content: `Opened ${active.name}.` });
+      } catch (err) {
+        State.noteMessage = String(err).replace(/^Error:\s*/, "");
+        State.view = "note";
+      }
+      State.notify();
+      onHeightChange();
+      return;
+    }
+
     input.value = "";
     sending = true;
     Sound.play("send");
@@ -75,13 +95,25 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     onHeightChange();
 
     const file = State.droppedFile;
+    const writeToActiveFile = Boolean(
+      active && /\b(?:write|type|put|draft|compose|add|replace|update)\b/i.test(query) &&
+      /\b(?:in|into)\s+(?:that|this|the)\s+(?:notepad|file|document|note)\b/i.test(query),
+    );
     const context: ChatContext | null = file
-      ? { kind: "file", name: file.name, path: file.path }
+      ? { kind: "file", name: file.name, path: file.path, ...(writeToActiveFile && active ? { writePath: active.path } : {}) }
+      : writeToActiveFile && active
+        ? { kind: "file", name: active.name, path: active.path, writePath: active.path }
       : null;
 
     try {
-      const reply = await Bridge.chatSend(query, context);
-      State.chatHistory.push({ id: nextId++, role: "assistant", content: reply.text });
+      const reply: ChatReply = await Bridge.chatSend(query, context);
+      State.chatHistory.push({
+        id: nextId++,
+        role: "assistant",
+        content: reply.writtenFile
+          ? `${reply.text}\n\nSaved the updated text to ${reply.writtenFile}.`
+          : reply.text,
+      });
       State.stateOverride = null;
       Sound.play("finish");
     } catch (err) {
@@ -115,7 +147,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
         appliedPrefill = true;
       }
       const file = State.droppedFile;
-      const wantChip = file?.name ?? "";
+      const wantChip = State.activeDocument?.name ?? file?.name ?? "";
       if (chipRow.dataset.label !== wantChip) {
         chipRow.dataset.label = wantChip;
         clear(chipRow);
@@ -132,7 +164,11 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
         log.scrollTop = log.scrollHeight;
       }
 
-      input.placeholder = State.chatHistory.length === 0 ? "Ask me anything…" : "Continue…";
+      input.placeholder = State.chatHistory.length === 0
+        ? "Ask me anything…"
+        : State.activeDocument
+          ? "Ask about it, or say “write in this file…”"
+          : "Continue…";
       input.disabled = sending;
     },
     focus() {

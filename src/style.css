@@ -940,6 +940,10 @@ input[type="range"]::-webkit-slider-thumb {
 .tool-section { display: grid; gap: 5px; }
 .task-runner, .task-maker { border-bottom: 1px solid #ffffff12; padding-bottom: 8px; }
 .task-runner .tool-muted { line-height: 1.35; }
+.quick-task-row { align-items: stretch; }
+.quick-task-row .tool-input { min-height: 30px; font-size: 11px; }
+.quick-task-row .primary { flex: 0 0 auto; min-width: 72px; }
+.task-runner > .tool-muted { max-width: 58ch; }
 .task-maker .tool-textarea { min-height: 54px; }
 .saved-tasks { display: grid; gap: 6px; max-height: 120px; overflow: auto; }
 .saved-task { display: grid; gap: 4px; padding: 7px; border: 1px solid #ffffff12; border-radius: 8px; background: #ffffff06; }
@@ -954,6 +958,16 @@ input[type="range"]::-webkit-slider-thumb {
 .alarm-list { display: flex; flex-wrap: wrap; gap: 4px; max-height: 32px; overflow: auto; }
 .alarm { padding: 4px 6px; border: 1px solid #ffffff16; border-radius: 6px; color: #b7bdc7; background: #ffffff08; font-size: 9px; }
 .file-tools { border-top: 1px solid #ffffff12; padding-top: 8px; }
+.code-agent { border-top: 1px solid #ffffff12; padding-top: 8px; }
+.code-prompt { min-height: 52px; }
+.code-agent-actions { align-items: flex-start; }
+.code-agent-actions .tool-muted { flex: 1; line-height: 1.35; }
+.code-agent-actions .primary { flex: 0 0 auto; }
+.code-changes { display: grid; gap: 5px; max-height: 240px; overflow: auto; }
+.code-change { min-width: 0; border: 1px solid #ffffff14; border-radius: 7px; background: #0003; }
+.code-change summary { padding: 5px 7px; color: #d8dcff; font: 10px ui-monospace, monospace; cursor: pointer; }
+.code-change-panes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; }
+.code-change-panes pre { max-height: 140px; min-width: 0; overflow: auto; margin: 0; padding: 5px; border-radius: 5px; color: #cbd5e1; background: #0005; font: 9px/1.4 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .file-results { display: flex; flex-direction: column; gap: 3px; max-height: 70px; overflow: auto; }
 .file-result { padding: 4px 6px; border: 1px solid #ffffff12; border-radius: 6px; color: #b7bdc7; background: #ffffff08; font-size: 9px; text-align: left; }
 .tool-textarea { width: 100%; min-height: 64px; resize: vertical; padding: 6px 8px; border: 1px solid #ffffff1c; border-radius: 8px; color: #f2f3f5; background: #0003; font: inherit; font-size: 10px; }

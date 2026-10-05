@@ -147,8 +147,7 @@ fn open_local_path(path: String) -> Result<(), String> {
     if !candidate.exists() {
         return Err("That local file or folder does not exist.".into());
     }
-    platform::reveal_path(&path);
-    Ok(())
+    platform::reveal_path(&path)
 }
 
 /// "Open terminal" opens the working folder in VS Code when `code` is on PATH,
@@ -285,6 +284,30 @@ async fn run_custom_task(
 }
 
 #[tauri::command]
+async fn generate_code_changes(
+    shared: State<'_, Shared>,
+    root: String,
+    instructions: String,
+) -> Result<safe_tools::CodeProposal, String> {
+    if instructions.trim().is_empty() {
+        return Err("Describe the code change you want.".into());
+    }
+    if instructions.len() > 4_000 {
+        return Err("Code instructions must be 4,000 bytes or fewer.".into());
+    }
+    let settings = shared.settings.lock().unwrap().clone();
+    claude::generate_code_changes(&settings, root, instructions).await
+}
+
+#[tauri::command]
+fn apply_code_changes(
+    root: String,
+    changes: Vec<safe_tools::CodeChange>,
+) -> Result<Vec<String>, String> {
+    safe_tools::apply_code_changes(&root, &changes)
+}
+
+#[tauri::command]
 fn search_files(root: String, query: String) -> Result<Vec<safe_tools::FileMatch>, String> {
     safe_tools::search(&root, &query)
 }
@@ -297,6 +320,18 @@ fn read_text_file(root: String, path: String) -> Result<String, String> {
 #[tauri::command]
 fn create_text_file(root: String, path: String, contents: String, confirmed: bool) -> Result<String, String> {
     safe_tools::create_text(&root, &path, &contents, confirmed)
+}
+
+#[tauri::command]
+fn create_desktop_text_file(
+    app: AppHandle,
+    name: Option<String>,
+) -> Result<safe_tools::CreatedFile, String> {
+    let desktop = app
+        .path()
+        .desktop_dir()
+        .map_err(|error| format!("Could not locate your Desktop folder: {error}"))?;
+    safe_tools::create_desktop_text(&desktop, name.as_deref())
 }
 
 #[tauri::command]
@@ -533,9 +568,12 @@ pub fn run() {
             log_line,
             chat_send,
             run_custom_task,
+            generate_code_changes,
+            apply_code_changes,
             search_files,
             read_text_file,
             create_text_file,
+            create_desktop_text_file,
             copy_text_to_clipboard,
             chat_reset,
             test_provider,

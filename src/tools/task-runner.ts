@@ -4,6 +4,8 @@ export type TaskPlan =
   | { kind: "openUrl"; url: string }
   | { kind: "search"; query: string }
   | { kind: "openPath"; path: string }
+  | { kind: "openCurrentFile" }
+  | { kind: "createDesktopNote"; name?: string }
   | { kind: "createNote"; path: string; contents: string }
   | { kind: "copyText"; contents: string }
   | { kind: "focusTimer"; seconds: number }
@@ -16,6 +18,8 @@ export type TaskResult =
 export interface TaskRunnerHooks {
   startFocusTimer(seconds: number): void;
   addReminder(at: number, label: string): void;
+  currentFile(): { name: string; path: string } | null;
+  setActiveFile(file: { name: string; path: string }): void;
 }
 
 const MAX_TIMER_SECONDS = 24 * 60 * 60;
@@ -62,6 +66,17 @@ export function parseTask(input: string): TaskPlan | null {
   const text = input.trim();
   if (!text) return null;
 
+  if (/^(?:(?:please|can you|could you)\s+)?(?:open|show)\s+(?:this|it|that|the (?:file|document|note))(?:\s+please)?[.!?]*$/i.test(text)) {
+    return { kind: "openCurrentFile" };
+  }
+
+  const desktopNote = text.match(
+    /^(?:make|create|new)\s+(?:me\s+)?(?:a\s+)?(?:blank\s+)?(?:text\s+)?(?:file|note)(?:\s+(?:named|called)\s+["']?([^"']+?)["']?)?(?:\s+(?:on|in)\s+(?:my\s+)?desktop)?$/i,
+  ) ?? text.match(
+    /^(?:make|create|new)\s+(?:me\s+)?(?:a\s+)?(?:blank\s+)?(?:text\s+)?(?:file|note)\s+(?:on|in)\s+(?:my\s+)?desktop(?:\s+(?:named|called)\s+["']?([^"']+?)["']?)?$/i,
+  );
+  if (desktopNote) return { kind: "createDesktopNote", name: desktopNote[1]?.trim() };
+
   const url = text.match(/^(?:open|go to)\s+(https?:\/\/\S+)$/i);
   if (url) return { kind: "openUrl", url: url[1] };
 
@@ -107,7 +122,6 @@ function formatDuration(seconds: number): string {
 export async function executeTask(
   plan: TaskPlan,
   hooks: TaskRunnerHooks,
-  confirmed = false,
 ): Promise<TaskResult> {
   try {
     switch (plan.kind) {
@@ -120,13 +134,28 @@ export async function executeTask(
       case "openPath":
         await Bridge.openLocalPath(plan.path);
         return { ok: true, message: "Opened the selected local path." };
+      case "openCurrentFile": {
+        const file = hooks.currentFile();
+        if (!file) return { ok: false, message: "Drop a file onto ACT 3 first, or create a Desktop note." };
+        await Bridge.openLocalPath(file.path);
+        return { ok: true, message: `Opened ${file.name}.` };
+      }
+      case "createDesktopNote": {
+        const file = await Bridge.createDesktopTextFile(plan.name);
+        hooks.setActiveFile(file);
+        await Bridge.openLocalPath(file.path);
+        return { ok: true, message: `Created and opened ${file.name} on your Desktop. You can now ask ACT 3 to write in it.` };
+      }
       case "createNote": {
-        if (!confirmed) return { ok: false, message: "Check the confirmation box to create this new note.", needsConfirmation: true };
         const separator = Math.max(plan.path.lastIndexOf("\\"), plan.path.lastIndexOf("/"));
         const root = separator > 0 ? plan.path.slice(0, separator) : plan.path;
         const relative = separator > 0 ? plan.path.slice(separator + 1) : "note.txt";
         const created = await Bridge.createTextFile(root, relative, plan.contents, true);
-        return { ok: true, message: `Created ${created} without overwriting an existing file.` };
+        const separatorChar = root.includes("/") && !root.includes("\\") ? "/" : "\\";
+        const path = `${root}${separatorChar}${created}`;
+        hooks.setActiveFile({ name: relative, path });
+        await Bridge.openLocalPath(path);
+        return { ok: true, message: `Created and opened ${relative}. You can now ask ACT 3 to write in it.` };
       }
       case "copyText":
         await Bridge.copyTextToClipboard(plan.contents);
@@ -144,6 +173,4 @@ export async function executeTask(
 }
 
 export const TASK_HELP =
-  "Examples: “open https://example.com”, “search cats”, “open folder C:\\\\Users\\\\you\\\\Documents”, " +
-  "“create note C:\\\\Users\\\\you\\\\Documents\\\\idea.txt: Buy milk”, “copy hello”, “start focus timer 25 minutes”, " +
-  "or “remind me in 10 minutes to stretch”.";
+  "Try “open this”, “make a text file on desktop”, “search cats”, “start a 25 minute timer”, or “remind me in 10 minutes to stretch”.";

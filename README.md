@@ -57,13 +57,33 @@ your integrations sit in the coloured pills next to Mochi.
 
 ### Tasks
 
-Open the **Tools** tab to run a quick action or make a reusable task. Saved tasks
-can have any name and instructions; ACT 3 sends them to the selected OpenRouter
-or Ollama model and displays its response. They do not change files or apps
-automatically. Quick actions can open a URL or web search, open an existing
-local file or folder, copy text, start a focus timer, and set a reminder.
-Creating a new text note always requires explicit confirmation and refuses to
-overwrite an existing file.
+Open the **Tools** tab to run a quick action or make a reusable task. Quick
+actions understand commands such as **“open this”**, **“make a text file on
+desktop”**, **“search cats”**, and **“start a 25 minute timer”**. Creating a
+Desktop note opens it in the default text editor and never overwrites an
+existing file. After creating a note or dropping a text file, ask ACT 3 to
+**“write in this file about …”**; the selected model returns the complete
+updated text and ACT 3 saves it to that file. Dropped files are opened from
+their original location; ACT 3 keeps a private copy for reading and only writes
+back to a supported text file when explicitly asked. PDFs can be read but are
+not modified; text edits are limited to 1 MB files.
+
+### Code with ACT 3
+
+In **Tools → Code with ACT 3**, enter a project folder and describe the change.
+ACT 3 sends at most 40 source files (200 KB total) to your selected model,
+displays the generated files for review, and applies changes only when you click
+**Apply changes**. You can opt into automatic application, which skips that
+review step. ACT 3 confines edits to supported source files under the selected
+project and never runs generated commands or code. If files change while a
+proposal is being reviewed, applying is refused and you can generate a fresh
+proposal. Use **Open in VS Code** to open the same project in VS Code; its
+`code` command must be available on PATH. Online providers receive the selected
+source context; use Ollama for local-only model inference.
+
+ACT 3 is a Windows desktop app built with Tauri. Its interface is rendered by
+the system WebView2 engine, so Task Manager may show WebView2 processes for the
+app; the native host is `act3.exe`.
 
 ## Claude Code
 
