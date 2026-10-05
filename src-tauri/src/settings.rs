@@ -73,7 +73,7 @@ pub fn load() -> Settings {
     match std::fs::read(settings_path()) {
         Ok(bytes) => {
             let mut settings: Settings = serde_json::from_slice(&bytes).unwrap_or_default();
-            if !matches!(settings.provider.as_str(), "openrouter" | "ollama") {
+            if !matches!(settings.provider.as_str(), "online" | "openrouter" | "ollama") {
                 settings.provider = default_provider();
             }
             if settings.model.starts_with("claude-") {

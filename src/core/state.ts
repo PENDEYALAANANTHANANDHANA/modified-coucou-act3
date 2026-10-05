@@ -90,7 +90,7 @@ export interface Settings {
   hooksInstalled: boolean;
   /** Selected model used by the active provider. */
   model: string;
-  provider: "openrouter" | "ollama";
+  provider: "online" | "openrouter" | "ollama";
   onlineBaseUrl: string;
   openrouterBaseUrl: string;
   ollamaUrl: string;

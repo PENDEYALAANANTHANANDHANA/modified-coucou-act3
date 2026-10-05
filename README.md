@@ -21,12 +21,16 @@ Keep an AI companion at the top of your screen, use Ollama or OpenRouter, create
 
 ## Install
 
-Download **`ACT-3-Windows-0.1.1-setup.exe`** from the latest GitHub Release and
+Download **`ACT-3-Windows-0.1.2-setup.exe`** from the latest GitHub Release and
 run it. The installer is unsigned, so Windows SmartScreen may show a warning;
 only continue if you downloaded it from this repository and trust the source.
 
 ACT 3 installs for the current Windows user and does not require administrator
-access. Configure Ollama in Settings, or choose OpenRouter and add your API key.
+access. Configure Ollama in Settings, or choose an online provider and add your
+API key.
+
+To check for a newer version, open **Settings → Updates → Check for updates**.
+ACT 3 opens the matching GitHub Release so you can download and run the installer.
 
 ## Using it
 
@@ -79,13 +83,14 @@ It works from any terminal — Windows Terminal, PowerShell, VS Code, Git Bash.
 
 ## Chat and keys
 
-**Settings… → OpenRouter and Ollama** selects the chat provider and model. The
-OpenRouter key lives in the **Windows Credential Manager**, never on disk or in
-the interface; local Ollama does not require a key. Claude Code hooks are a
-separate integration and can be left disabled if you do not use Claude Code.
+**Settings… → AI provider** selects the chat provider and model.
+OpenAI-compatible and OpenRouter keys live in the **Windows Credential Manager**,
+never on disk or in the interface; local Ollama does not require a key.
+Anthropic chat support has been removed. Claude Code hooks remain a separate
+integration and can be left disabled if you do not use Claude Code.
 
-No telemetry. The only network requests Coucou makes are to the services you
-configure yourself.
+No telemetry. The update checker contacts GitHub only when you request a check;
+chat and integrations connect only to the services you configure yourself.
 
 ## Build it yourself
 
@@ -111,6 +116,11 @@ workflow publishes:
 ACT-3-Windows-X.Y.Z-setup.exe    the versioned installer
 ACT-3-Windows-setup.exe          the same file under the rolling name
 ```
+
+To publish a release, update the version in `Cargo.toml` and
+`src-tauri/tauri.conf.json` to the same value, then push a matching `vX.Y.Z` tag.
+The GitHub Actions release workflow builds the Windows installer and attaches it
+to a generated GitHub Release. The in-app update check reads that release.
 
 The installer adds an **ACT 3** shortcut to the Windows Start menu. Installing is
 optional — `target/release/act3.exe` runs on its own. There is no window in the

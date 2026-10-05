@@ -99,6 +99,7 @@ export const Bridge = {
   testProvider: (provider?: Settings["provider"]) =>
     callOrThrow<string>("test_provider", provider ? { provider } : undefined),
   providerStatus: () => callOrThrow<ProviderStatus>("provider_status"),
+  checkForUpdate: () => callOrThrow<UpdateStatus>("check_for_update"),
   /** Copies a dropped file into the inbox. */
   ingestFile: (path: string) => callOrThrow<DroppedFile>("ingest_file", { path }),
   /** Only ever tells you whether a key exists — never its value. */
@@ -146,7 +147,14 @@ export interface ProviderStatus {
   ollama: string;
   ollamaModel: string;
   ollamaModels: string[];
+  openaiKey: boolean;
   openrouterKey: boolean;
+}
+
+export interface UpdateStatus {
+  currentVersion: string;
+  latestVersion: string;
+  releaseUrl: string;
 }
 
 export interface HookPreview {

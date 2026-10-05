@@ -319,6 +319,7 @@ struct ProviderStatus {
     ollama: String,
     ollama_model: String,
     ollama_models: Vec<String>,
+    openai_key: bool,
     openrouter_key: bool,
 }
 
@@ -333,7 +334,44 @@ async fn provider_status(shared: State<'_, Shared>) -> Result<ProviderStatus, St
         ollama,
         ollama_model: settings.model,
         ollama_models,
+        openai_key: secrets::present("online-api-key"),
         openrouter_key: secrets::present("openrouter-api-key"),
+    })
+}
+
+#[derive(serde::Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    html_url: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateStatus {
+    current_version: String,
+    latest_version: String,
+    release_url: String,
+}
+
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> Result<UpdateStatus, String> {
+    let release = reqwest::Client::builder()
+        .user_agent("ACT-3-Updater")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|error| format!("Could not initialize update check: {error}"))?
+        .get("https://api.github.com/repos/PENDEYALAANANTHANANDHANA/modified-coucou-act3/releases/latest")
+        .send().await
+        .map_err(|error| format!("Could not check GitHub Releases: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("GitHub Releases returned an error: {error}"))?
+        .json::<GithubRelease>().await
+        .map_err(|error| format!("Could not read the latest GitHub Release: {error}"))?;
+
+    Ok(UpdateStatus {
+        current_version: app.package_info().version.to_string(),
+        latest_version: release.tag_name.trim_start_matches('v').to_string(),
+        release_url: release.html_url,
     })
 }
 
@@ -494,6 +532,7 @@ pub fn run() {
             chat_reset,
             test_provider,
             provider_status,
+            check_for_update,
             ingest_file,
             secret_present,
             secret_set,

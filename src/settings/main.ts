@@ -1,7 +1,7 @@
 // Settings window — the place where anything that writes to disk is confirmed.
 
 import "./settings.css";
-import { Bridge, onEvent, type HookStatus } from "../core/bridge";
+import { Bridge, onEvent, type HookStatus, type UpdateStatus } from "../core/bridge";
 import { DEFAULT_SETTINGS, type Settings } from "../core/state";
 import { h, clear } from "../views/dom";
 
@@ -250,13 +250,14 @@ function apiSection(): HTMLElement {
     return badge;
   }
 
+  const openaiBadge = keyBadge(false, "OpenAI-compatible");
   const openrouterBadge = keyBadge(false, "OpenRouter");
 
   const onlineStatusCard = h(
     "div",
     { style: "background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px" },
-    h("div", { style: "font:600 12px var(--font);color:var(--ink)" }, h("span", { text: "OpenRouter key status" })),
-    h("div", { style: "display:flex;flex-wrap:wrap;gap:6px" }, openrouterBadge),
+    h("div", { style: "font:600 12px var(--font);color:var(--ink)" }, h("span", { text: "Online provider key status" })),
+    h("div", { style: "display:flex;flex-wrap:wrap;gap:6px" }, openaiBadge, openrouterBadge),
   );
 
   // ── Refresh all provider status ─────────────────────────────────────────
@@ -272,9 +273,9 @@ function apiSection(): HTMLElement {
       // Ollama
       const isActive = s.ollama.startsWith("Active");
       ollamaActiveDot.style.background = isActive ? "#22c55e" : "#f4505e";
-      dot.style.background = settings.provider === "ollama"
-        ? (isActive ? "#22c55e" : "#f4505e")
-        : (s.openrouterKey ? "#22c55e" : "#f4505e");
+      const selectedKeyPresent = settings.provider === "ollama"
+        || (settings.provider === "openrouter" ? s.openrouterKey : s.openaiKey);
+      dot.style.background = selectedKeyPresent ? "#22c55e" : "#f4505e";
       ollamaActiveLabel.textContent = s.ollama;
       ollamaActiveLabel.style.color = "";
       ollamaEndpoint.textContent = settings.ollamaUrl || "http://127.0.0.1:11434";
@@ -283,6 +284,7 @@ function apiSection(): HTMLElement {
       updateModelOptions();
       const countMatch = s.ollama.match(/(\d+)\s*model/);
       ollamaModelCount.textContent = countMatch ? countMatch[1] : "—";
+      updateBadge(openaiBadge, s.openaiKey, "OpenAI-compatible");
       updateBadge(openrouterBadge, s.openrouterKey, "OpenRouter");
     } catch (err) {
       ollamaActiveDot.style.background = "#f4505e";
@@ -320,16 +322,18 @@ function apiSection(): HTMLElement {
   // ── Provider tabs ───────────────────────────────────────────────────────
   const provider = h("select", {}) as HTMLSelectElement;
   provider.append(
+    h("option", { value: "online", text: "OpenAI-compatible online" }),
     h("option", { value: "openrouter", text: "OpenRouter" }),
     h("option", { value: "ollama", text: "Ollama local" }),
   );
   provider.value = settings.provider;
   const endpointValue = () => settings.provider === "ollama"
     ? settings.ollamaUrl
-    : settings.openrouterBaseUrl;
+    : settings.provider === "openrouter" ? settings.openrouterBaseUrl : settings.onlineBaseUrl;
   const providerTabs = h("div", { class: "row" }, h("label", { text: "Provider" }));
   const tabButtons: HTMLButtonElement[] = [];
   for (const [value, label] of [
+    ["online", "OpenAI-compatible"],
     ["openrouter", "OpenRouter"],
     ["ollama", "Ollama"],
   ] as const) {
@@ -348,7 +352,7 @@ function apiSection(): HTMLElement {
   }
   const endpoint = h("input", {
     value: endpointValue(),
-    placeholder: settings.provider === "ollama" ? "http://127.0.0.1:11434" : "https://openrouter.ai/api/v1",
+    placeholder: settings.provider === "ollama" ? "http://127.0.0.1:11434" : settings.provider === "openrouter" ? "https://openrouter.ai/api/v1" : "https://api.openai.com/v1",
     style: "flex:1 1 auto;min-width:0",
   }) as HTMLInputElement;
   const modelOptions = h("datalist", { id: "provider-model-options" });
@@ -364,7 +368,7 @@ function apiSection(): HTMLElement {
     clear(modelOptions);
     const suggestions = settings.provider === "ollama"
       ? [...detectedOllamaModels]
-      : MODELS.map(([id]) => id);
+      : settings.provider === "openrouter" ? MODELS.map(([id]) => id) : [];
     if (settings.model && !suggestions.includes(settings.model)) suggestions.unshift(settings.model);
     for (const name of suggestions) modelOptions.append(h("option", { value: name }));
     model.value = settings.model;
@@ -373,7 +377,7 @@ function apiSection(): HTMLElement {
   updateModelOptions();
 
   async function refresh() {
-    const keyName = "openrouter-api-key";
+    const keyName = settings.provider === "openrouter" ? "openrouter-api-key" : "online-api-key";
     const present = settings.provider === "ollama" || ((await Bridge.secretPresent(keyName)) ?? false);
     dot.style.background = present ? "#22c55e" : "#f4505e";
     state.textContent = settings.provider === "ollama"
@@ -396,7 +400,7 @@ function apiSection(): HTMLElement {
     if (!value) return;
     clear(feedback);
     try {
-      const keyName = "openrouter-api-key";
+      const keyName = settings.provider === "openrouter" ? "openrouter-api-key" : "online-api-key";
       await Bridge.secretSet(keyName, value);
       field.value = "";
       feedback.append(h("div", { class: "notice ok", text: "Saved. It never touches disk." }));
@@ -410,7 +414,7 @@ function apiSection(): HTMLElement {
   clearBtn.addEventListener("click", async () => {
     clear(feedback);
     try {
-      const keyName = "openrouter-api-key";
+      const keyName = settings.provider === "openrouter" ? "openrouter-api-key" : "online-api-key";
       await Bridge.secretClear(keyName);
       feedback.append(h("div", { class: "notice ok", text: "Key removed." }));
       await refresh();
@@ -437,7 +441,9 @@ function apiSection(): HTMLElement {
   provider.addEventListener("change", async () => {
     settings.provider = provider.value as Settings["provider"];
     endpoint.value = endpointValue();
-    endpoint.placeholder = settings.provider === "ollama" ? "http://127.0.0.1:11434" : "https://openrouter.ai/api/v1";
+    endpoint.placeholder = settings.provider === "ollama"
+      ? "http://127.0.0.1:11434"
+      : settings.provider === "openrouter" ? "https://openrouter.ai/api/v1" : "https://api.openai.com/v1";
     field.style.display = settings.provider === "ollama" ? "none" : "";
     saveBtn.style.display = settings.provider === "ollama" ? "none" : "";
     clearBtn.style.display = settings.provider === "ollama" ? "none" : "";
@@ -449,6 +455,7 @@ function apiSection(): HTMLElement {
   endpoint.addEventListener("change", async () => {
     if (settings.provider === "ollama") settings.ollamaUrl = endpoint.value.trim();
     else if (settings.provider === "openrouter") settings.openrouterBaseUrl = endpoint.value.trim();
+    else settings.onlineBaseUrl = endpoint.value.trim();
     if (settings.provider === "ollama") ollamaEndpoint.textContent = settings.ollamaUrl;
     await save();
   });
@@ -493,7 +500,7 @@ function apiSection(): HTMLElement {
   return h(
     "section",
     {},
-    h("h2", {}, dot, h("span", { text: "OpenRouter and Ollama" })),
+    h("h2", {}, dot, h("span", { text: "AI provider" })),
     h("div", { class: "row" }, refreshAllBtn, openSettingsBtn),
     ollamaCard,
     onlineStatusCard,
@@ -505,6 +512,58 @@ function apiSection(): HTMLElement {
     h("div", { class: "row" }, h("label", { text: "Model" }), model),
     modelOptions,
     feedback,
+  );
+}
+
+function compareVersions(left: string, right: string): number {
+  const parts = (version: string) => version.replace(/^v/i, "").split("-")[0].split(".").map((part) => Number(part) || 0);
+  const a = parts(left);
+  const b = parts(right);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const difference = (a[index] ?? 0) - (b[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function updaterSection(): HTMLElement {
+  const result = h("div", { class: "hint", text: "Check GitHub Releases for a newer ACT 3 version." });
+  const check = h("button", { class: "secondary", text: "Check for updates" });
+  const release = h("button", { class: "primary", text: "Open GitHub release", style: "display:none" });
+  let releaseUrl = "";
+
+  check.addEventListener("click", async () => {
+    check.disabled = true;
+    check.textContent = "Checking…";
+    release.style.display = "none";
+    try {
+      const update: UpdateStatus = await Bridge.checkForUpdate();
+      if (compareVersions(update.latestVersion, update.currentVersion) > 0) {
+        result.textContent = `ACT 3 ${update.latestVersion} is available (you have ${update.currentVersion}).`;
+        result.className = "notice warn";
+        releaseUrl = update.releaseUrl;
+        release.style.display = "";
+      } else {
+        result.textContent = `You’re up to date (version ${update.currentVersion}).`;
+        result.className = "notice ok";
+      }
+    } catch (error) {
+      result.textContent = `Update check failed: ${String(error).replace(/^Error:\s*/, "")}`;
+      result.className = "notice err";
+    } finally {
+      check.disabled = false;
+      check.textContent = "Check for updates";
+    }
+  });
+  release.addEventListener("click", () => {
+    if (releaseUrl) void Bridge.openUrl(releaseUrl);
+  });
+
+  return h("section", {},
+    h("h2", {}, h("span", { text: "Updates" })),
+    result,
+    h("div", { class: "row" }, check, release),
+    h("div", { class: "hint", text: "Updates open the matching GitHub Release so you can download and run its installer." }),
   );
 }
 
@@ -688,11 +747,12 @@ async function main() {
     h("h1", {}, h("span", { text: "ACT 3" }), h("span", { class: "version", text: version })),
     claudeSection(status),
     apiSection(),
+    updaterSection(),
     integrationsSection(present),
     generalSection(),
     h("div", {
       class: "hint",
-      text: "No telemetry. Network requests only go to the services you configure yourself.",
+      text: "No telemetry. The update checker contacts GitHub only when requested; chat and integrations contact the services you configure.",
     }),
   );
 
