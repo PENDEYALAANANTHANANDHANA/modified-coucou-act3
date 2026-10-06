@@ -47,17 +47,17 @@ ACT 3 opens the matching GitHub Release so you can download and run the installe
 | Click the small island | It opens |
 | Click Mochi | It gets annoyed. Three times in a row and it goes dizzy |
 | Rest the pointer on Mochi for two seconds | Hearts |
-| Drag a file onto the island | Mochi turns into a box, swallows it, then offers to answer questions about it |
+| Drop files or folders onto ACT 3 | Works from any folder; Mochi privately copies supported documents and can answer questions across them |
 | `Esc` | Closes the island |
 | Tray icon | Open, Settings…, Pause, Quit |
 
-Everything else happens on its own: a Claude Code permission request opens the
-island with **Deny / Allow**, a finished session shows what it did, and
+Everything else happens on its own: Claude Code permission and question prompts
+open in the island's **Tools** tab, a finished session shows what it did, and
 your integrations sit in the coloured pills next to Mochi.
 
 ### Tasks
 
-Open the **Tools** tab to run a quick action or make a reusable task. Quick
+Open **Ask → Tasks** to run a quick action or make a reusable task. Quick
 actions understand commands such as **“open this”**, **“make a text file on
 desktop”**, **“search cats”**, and **“start a 25 minute timer”**. Creating a
 Desktop note opens it in the default text editor and never overwrites an
@@ -70,16 +70,44 @@ not modified; text edits are limited to 1 MB files.
 
 ### Code with ACT 3
 
-In **Tools → Code with ACT 3**, enter a project folder and describe the change.
+In **Ask → Code**, enter a project folder and describe the change.
 ACT 3 sends at most 40 source files (200 KB total) to your selected model,
-displays the generated files for review, and applies changes only when you click
-**Apply changes**. You can opt into automatic application, which skips that
-review step. ACT 3 confines edits to supported source files under the selected
-project and never runs generated commands or code. If files change while a
-proposal is being reviewed, applying is refused and you can generate a fresh
-proposal. Use **Open in VS Code** to open the same project in VS Code; its
+shows an animated progress indicator while the model prepares a proposal, then
+displays the generated diffs for review. No files are changed unless you choose
+**Accept & apply changes** in the animated Ask review popup; **Reject changes**
+discards the proposal. Tasks and file utilities are available in **Tools**,
+leaving Ask with just Chat and Code. ACT 3
+confines edits to supported source files under the selected project and never
+runs generated commands or code. If files change while a proposal is being
+reviewed, applying is refused and you can generate a fresh proposal. Use
+**Open in VS Code** to open the same project in VS Code; its
 `code` command must be available on PATH. Online providers receive the selected
 source context; use Ollama for local-only model inference.
+
+The **Ask → Code** tab focuses on starting a project proposal. Follow confirmed
+generation milestones in the separate **Live** tab; proposed edits are shown for
+review and nothing is written until you explicitly approve them. Additional
+project utilities are tucked under **Project tools**.
+
+Use **Summarize project** for an AI-generated overview, or **Ask about project**
+to attach the bounded source snapshot to an Ask conversation. In Ask, **Attach
+previous app/window** adds only the app name and window title captured before
+ACT 3 takes focus. **Share app screenshot** is a separate, explicit choice; it
+captures the previous app window and attaches a visible preview. The screenshot
+is sent only when you send a chat message or request a desktop action. Online
+bots send it to their configured provider; Ollama sends it to its configured
+endpoint, which may be remote.
+
+In **Tools**, add trusted local stdio MCP servers in Settings to discover app
+tools. Each model-requested or manually composed tool call requires a separate
+**Allow once** approval. The desktop-action tool is currently Windows-only:
+describe one action for a shared screenshot, inspect the refreshed screenshot
+and exact proposed action, then approve it in Tools. ACT 3 allows one bounded
+click, printable text entry, or navigation key per approval; password-field
+typing and actions on a changed window are refused. It does not run actions
+automatically. Use **Detach context** to remove an app or project attachment.
+The project summary and project-aware chat send source files to the currently
+selected model, so choose Ollama only when its configured endpoint is local.
 
 ACT 3 is a Windows desktop app built with Tauri. Its interface is rendered by
 the system WebView2 engine, so Task Manager may show WebView2 processes for the
@@ -94,11 +122,17 @@ will change in `%USERPROFILE%\.claude\settings.json`, the path of the dated back
 that will be taken, and nothing is written until you click. Your own hooks are
 never touched, and uninstalling removes only Coucou's entries.
 
+Permission requests appear in **Tools**, where you can review the command or
+file path before choosing **Deny** or **Allow**. Claude Code's
+`AskUserQuestion` prompts also appear there: select one or more choices, move
+through multi-part questions, or type a custom answer. Choosing **Answer in
+terminal** safely hands the question back to Claude Code's terminal.
+
 The relay is a tiny executable, `coucou-hook.exe`, copied to
 `%LOCALAPPDATA%\Coucou\bin\` at launch. It is given 300 ms to reach Coucou and
 exits cleanly if the app is closed, slow or crashed — **a Claude Code session is
-never blocked or slowed down by Coucou.** If nobody answers a permission request
-in time, Coucou stays quiet and Claude Code asks in the terminal as usual.
+never blocked or slowed down by Coucou.** If nobody answers a request in time,
+Coucou stays quiet and Claude Code asks in the terminal as usual.
 
 It works from any terminal — Windows Terminal, PowerShell, VS Code, Git Bash.
 
@@ -112,12 +146,27 @@ The endpoint and model can be changed in provider settings.
 Anthropic chat support has been removed. Claude Code hooks remain a separate
 integration and can be left disabled if you do not use Claude Code.
 
-Drop a PDF or UTF-8 text file onto the island to ask questions about it. ACT 3
-extracts PDF text locally before sending the document context to the selected
-provider, including Ollama. Scanned/image-only PDFs are not supported yet
-because they require OCR. The document stays available as context for follow-up
-questions in the same chat. Documents over 10 MB or 200,000 extracted characters
-are rejected with an explanation.
+Drop up to 20 PDFs or UTF-8 text files at once—from any directory—to ask
+questions across them together. Folder drops collect PDFs and common text/code
+files through eight levels, skip symlinks and build/dependency folders, and stop
+at 20 files or 10,000 directory entries.
+ACT 3 makes private inbox copies, so originals are untouched and their location
+does not matter. Each file is limited to 30 MB; a batch is limited to 50 MB
+total and combined extracted context to 200,000 characters. The documents stay
+attached for follow-up questions in the same chat. Scanned/image-only PDFs and
+binary office documents are not supported yet.
+
+The Code tab's **Choose folder…** button opens a native project-folder picker;
+the selected project is remembered for the next session.
+
+The chat has three color-coded bots with separate conversation histories:
+**OmniRoute** (purple) uses its configured online model router, **OpenRouter**
+(orange) uses the configured OpenRouter model and key, and **Ollama** (green)
+uses its configured local model endpoint. Each bot keeps its own selected
+model in Settings. All three follow the shared [`AGENTS.md`](./AGENTS.md)
+assistant rules, supplied as system instructions for chat, friend-mode
+greetings, and coding requests. Mochi also shows occasional, silent random
+expressions while idle; these are visual-only and do not trigger AI requests.
 
 No telemetry. The update checker contacts GitHub only when you request a check;
 chat and integrations connect only to the services you configure yourself.
@@ -156,8 +205,9 @@ ACT-3-Windows-setup.exe          the same file under the rolling name
 ```
 
 The GitHub Release also includes `setup.exe`, a copy of the versioned installer.
-To publish a release, update the version in `Cargo.toml` and
-`src-tauri/tauri.conf.json` to the same value, then push a matching `vX.Y.Z` tag.
+To publish a release, update the version in `Cargo.toml`, `package.json`, and
+`src-tauri/tauri.conf.json` to the same value (and keep their lockfiles in sync),
+then push a matching `vX.Y.Z` tag.
 The GitHub Actions release workflow builds the Windows installer and attaches it
 to a generated GitHub Release. The in-app update check reads that release.
 

@@ -29,11 +29,11 @@ function dashedFrame(): SVGSVGElement {
 
 export function buildUpload(): ViewHost {
   const frame = dashedFrame();
-  const title = h("div", { class: "drop-title", text: "Drop your files here" });
+  const title = h("div", { class: "drop-title", text: "Drop files or folders here" });
   const tags = h(
     "div",
     { class: "drop-tags" },
-    ...["PDF", "Images", "Code", "Docs"].map((t) => h("span", { text: t })),
+    ...["PDF", "Text", "Code"].map((t) => h("span", { text: t })),
   );
   const card = h(
     "div",
@@ -116,7 +116,7 @@ export function buildChoose(actions: ViewActions): ViewHost {
       clear(title);
       title.append(
         h("b", { text: State.droppedFile?.name ?? "file" }),
-        document.createTextNode(" is ready."),
+        document.createTextNode(State.droppedFiles.length > 1 ? " are ready." : " is ready."),
       );
     },
   };

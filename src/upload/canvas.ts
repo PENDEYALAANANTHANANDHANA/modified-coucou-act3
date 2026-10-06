@@ -200,7 +200,9 @@ export class UploadCanvas {
     const by = USC.BAR_Y;
     const barLen = (x1 - x0) * f.barReveal;
 
-    const name = State.droppedFile?.name ?? "file";
+    const name = State.droppedFiles.length > 1
+      ? `${State.droppedFiles.length} files`
+      : State.droppedFile?.name ?? "file";
     text(ctx, `Uploading ${name}`, x0, by - 30, `500 12.5px ${FONT}`, "#A9ADB5");
 
     if (f.check > 0) {
@@ -272,7 +274,9 @@ export class UploadCanvas {
     ctx.globalAlpha = f.chooseAlpha;
     ctx.translate(0, (1 - f.chooseAlpha) * 4);
 
-    const name = State.droppedFile?.name ?? "file";
+    const name = State.droppedFiles.length > 1
+      ? `${State.droppedFiles.length} files`
+      : State.droppedFile?.name ?? "file";
     text(ctx, `${name} is ready.`, 114, 80, `600 14px ${FONT}`, "#F5F6F8");
     text(ctx, "What do you want to do with it?", 114, 100, `400 12.5px ${FONT}`, "#9398A1");
 

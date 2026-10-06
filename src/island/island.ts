@@ -33,6 +33,7 @@ const PRE_PROGRESS = USC.T_PROG_START - USC.T_DROP;
 const modeOrder = (m: IslandMode) => (m === "hidden" ? 0 : m === "compact" ? 1 : 2);
 
 export class Island {
+  private dropGeneration = 0;
   readonly fsm = new IslandStateMachine();
 
   private root: HTMLElement;
@@ -87,6 +88,7 @@ export class Island {
   /** Drop sequence bookkeeping: last tick played, and whether the ✓ has fired. */
   private uploadTens = 0;
   private uploadDone = false;
+  private dropReady = false;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -145,6 +147,30 @@ export class Island {
         State.setPillBadge("integration_claude", null);
         this.setView(State.defaultView());
       },
+      answerQuestion: async (answers) => {
+        const request = State.pendingQuestion;
+        if (!request) return;
+        await Bridge.answerQuestion(request.requestId, answers);
+        if (State.pendingQuestion?.requestId !== request.requestId) return;
+        State.pendingQuestion = null;
+        State.isPinned = false;
+        this.fsm.pinned = false;
+        State.updateTask("integration_claude", "working");
+        State.setPillBadge("integration_claude", null);
+        this.setView(State.defaultView());
+      },
+      declineQuestion: async () => {
+        const request = State.pendingQuestion;
+        if (!request) return;
+        await Bridge.releaseQuestion(request.requestId);
+        if (State.pendingQuestion?.requestId !== request.requestId) return;
+        State.pendingQuestion = null;
+        State.isPinned = false;
+        this.fsm.pinned = false;
+        State.updateTask("integration_claude", "working");
+        State.setPillBadge("integration_claude", null);
+        this.setView(State.defaultView());
+      },
       toggleSound: () => {
         State.settings.soundEnabled = !State.settings.soundEnabled;
         Sound.setEnabled(State.settings.soundEnabled);
@@ -177,6 +203,11 @@ export class Island {
     this.wakeStrip = h("div", { id: "wake-strip" });
     this.botGlow = h("div", { id: "bot-glow" });
     this.botCanvas = h("canvas", { id: "bot-canvas" });
+    this.botCanvas.addEventListener("click", () => {
+      if (State.mode === "expanded" && State.view === "prompt") {
+        document.dispatchEvent(new Event("act3:open-agent-picker"));
+      }
+    });
     this.greetingCanvas = h("canvas", { id: "greeting-canvas" });
     this.miniGrid = h("div", { id: "mini-grid" });
     this.countdown = h("div", { id: "countdown" });
@@ -191,9 +222,11 @@ export class Island {
     // the header, which stays visible on top of it exactly as on macOS.
     this.uploadCanvas = new UploadCanvas({
       ask: () => {
-        State.promptContext = State.droppedFile
-          ? { kind: "file", name: State.droppedFile.name, path: State.droppedFile.path }
-          : null;
+        State.promptContext = State.droppedFiles.length > 1
+          ? { kind: "file", name: `${State.droppedFiles.length} files` }
+          : State.droppedFile
+            ? { kind: "file", name: State.droppedFile.name, path: State.droppedFile.path }
+            : null;
         this.setView("prompt");
       },
       cancel: () => this.setView(State.defaultView()),
@@ -372,13 +405,13 @@ export class Island {
       }
       case "drop": {
         State.fileDragOver = false;
-        const path = e.paths?.[0];
-        if (!path) {
+        const paths = [...new Set(e.paths ?? [])];
+        if (paths.length === 0) {
           this.engine.animateMorph(0);
           this.setView(State.defaultView());
           return;
         }
-        this.swallow(path);
+        this.swallow(paths);
         break;
       }
     }
@@ -389,17 +422,25 @@ export class Island {
    * the inbox runs in the background and swaps the path in when it lands, so a
    * slow disk can never stall the animation — same as FileDropHandler on macOS.
    */
-  private swallow(path: string) {
-    const name = path.split(/[\\/]/).pop() || "file";
-    State.droppedFile = { name, path };
-    State.activeDocument = { name, path };
-    State.promptContext = { kind: "file", name, path };
+  private swallow(paths: string[]) {
+    const generation = ++this.dropGeneration;
+    const firstPath = paths[0];
+    const name = paths.length === 1
+      ? firstPath.split(/[\\/]/).pop() || "file"
+      : `${paths.length} files`;
+    State.droppedFile = { name, path: firstPath };
+    State.droppedFiles = [];
+    State.projectRootContext = null;
+    State.attachedWindowContext = null;
+    State.activeDocument = paths.length === 1 ? { name, path: firstPath } : null;
+    State.promptContext = { kind: "file", name, path: firstPath };
     State.chatHistory = [];
     void Bridge.chatReset();
 
     UploadSeq.performDrop(State.uploadDuration);
     this.uploadTens = 0;
     this.uploadDone = false;
+    this.dropReady = false;
 
     this.engine.gulp();
     Sound.play("approve");
@@ -410,13 +451,24 @@ export class Island {
     this.setView("uploading");
     this.ensureRunning();
 
-    void Bridge.ingestFile(path)
-      .then((file) => {
-        State.droppedFile = { name: file.name, path: file.path };
-        State.promptContext = { kind: "file", name: file.name, path: file.path };
+    void Bridge.ingestFiles(paths)
+      .then((files) => {
+        if (generation !== this.dropGeneration) return;
+        this.dropReady = true;
+        State.droppedFiles = files.map(({ name, path }) => ({ name, path }));
+        State.droppedFile = paths.length === 1
+          ? { name: files[0].name, path: files[0].path }
+          : { name: `${files.length} files`, path: files[0].path };
+        State.activeDocument = files.length === 1
+          ? { name: files[0].name, path: files[0].path }
+          : null;
+        State.promptContext = files.length === 1
+          ? { kind: "file", name: files[0].name, path: files[0].path }
+          : { kind: "file", name: `${files.length} files` };
         State.notify();
       })
       .catch((err) => {
+        if (generation !== this.dropGeneration) return;
         UploadSeq.deactivate();
         State.noteMessage = String(err).replace(/^Error:\s*/, "");
         this.engine.animateMorph(0);
@@ -442,13 +494,13 @@ export class Island {
       Sound.play("tick");
     }
 
-    if (!this.uploadDone && since >= PRE_PROGRESS + dur) {
+    if (!this.uploadDone && this.dropReady && since >= PRE_PROGRESS + dur) {
       this.uploadDone = true;
       Sound.play("approve");
       this.engine.triggerEmote("happy");
     }
     // The extra second is the grow-back, after which the choose card is up.
-    if (since >= PRE_PROGRESS + dur + 1 && State.view === "uploading") {
+    if (this.dropReady && since >= PRE_PROGRESS + dur + 1 && State.view === "uploading") {
       this.setView("choose");
     }
   }
@@ -537,7 +589,8 @@ export class Island {
       if (State.mode === "hidden") this.fsm.mouseEntered();
     });
 
-    this.islandEl.addEventListener("mousedown", (e) => {
+    this.islandEl.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
       Sound.resume();
       State.lastActivity = performance.now();
       if (State.mode !== "expanded") {
@@ -717,7 +770,12 @@ export class Island {
     }
 
     const uploadActive = this.uploadActive;
-    if (uploadActive) this.uploadCanvas.draw(UploadSeq.frame(), nowMs / 1000);
+    if (uploadActive) {
+      const frame = UploadSeq.frame();
+      State.uploadProgress = this.dropReady ? frame.progress : Math.min(frame.progress, 0.95);
+      this.views.get("uploading")?.sync();
+      this.uploadCanvas.draw(frame, nowMs / 1000);
+    }
     this.uploadCanvas.el.classList.toggle("on", uploadActive);
     this.viewsEl.classList.toggle("hidden-by-upload", uploadActive);
 
@@ -840,10 +898,13 @@ export class Island {
   private syncDom() {
     const expanded = State.mode === "expanded";
     const greetingActive = expanded && State.view === "greeting";
+    const askViewActive = expanded && State.view === "prompt";
 
     this.contentEl.style.opacity = expanded && !greetingActive ? "1" : "0";
     this.contentEl.style.pointerEvents = expanded && !greetingActive ? "auto" : "none";
     this.greetingCanvas.style.display = greetingActive ? "block" : "none";
+    this.botCanvas.style.pointerEvents = askViewActive ? "auto" : "none";
+    this.botCanvas.style.cursor = askViewActive ? "pointer" : "default";
 
     this.header.sync();
     for (const [name, view] of this.views) {
@@ -858,7 +919,12 @@ export class Island {
       const wasChat = this.lastSyncedView === "prompt";
       this.lastSyncedView = State.view;
       if (State.view === "prompt") {
-        void Bridge.focusWindow(true);
+        void Bridge.focusWindow(true).then((context) => {
+          if (context) {
+            State.previousWindowContext = context;
+            State.notify();
+          }
+        });
         window.setTimeout(() => this.views.get("prompt")?.focus?.(), 120);
       } else if (wasChat) {
         void Bridge.focusWindow(false);

@@ -5,30 +5,47 @@ import { h, svg, clear } from "./dom";
 import { ICONS } from "./icons";
 import { Bridge, type ChatContext, type ChatReply } from "../core/bridge";
 import { Sound } from "../core/sound";
-import { State, type ChatMessage } from "../core/state";
+import { CHAT_AGENTS, State, type ChatAgentId, type ChatMessage } from "../core/state";
 import type { ViewHost } from "./views";
 import { appendMarkdown } from "./markdown";
+import { createMiniBot } from "../mochi/minibots";
 
 let nextId = 1;
 
-function bubble(message: ChatMessage): HTMLElement {
+function bubble(message: ChatMessage, agent: ChatAgentId, animate = false): HTMLElement {
+  const entrance = animate ? " message-enter" : "";
   if (message.role === "user") {
     return h(
       "div",
-      { class: "chat-row user" },
+      { class: `chat-row user${entrance}` },
       h("div", { class: "bubble", text: message.content }),
     );
   }
   const reply = h("div", { class: "reply" });
   appendMarkdown(reply, message.content);
-  return h("div", { class: "chat-row" }, reply);
-}
-
-function typingDots(): HTMLElement {
   return h(
     "div",
-    { class: "chat-row" },
-    h("div", { class: "typing" }, h("i"), h("i"), h("i")),
+    { class: `chat-row assistant${entrance}`, style: `--agent-color:${CHAT_AGENTS[agent].color}` },
+    h("i", { class: "chat-reply-dot", title: CHAT_AGENTS[agent].name }),
+    reply,
+  );
+}
+
+function typingDots(agent: ChatAgentId): HTMLElement {
+  const name = CHAT_AGENTS[agent].name;
+  return h(
+    "div",
+    {
+      class: "chat-row typing-row message-enter",
+      style: `--agent-color:${CHAT_AGENTS[agent].color}`,
+      role: "status",
+      "aria-label": `${name} is writing`,
+    },
+    h("i", { class: "chat-reply-dot", "aria-hidden": "true" }),
+    h("div", { class: "typing-indicator" },
+      h("span", { class: "typing-label", text: `${name} is writing` }),
+      h("div", { class: "typing", "aria-hidden": "true" }, h("i"), h("i"), h("i")),
+    ),
   );
 }
 
@@ -40,7 +57,300 @@ function contextChip(label: string): HTMLElement {
 }
 
 export function buildPrompt(onHeightChange: () => void): ViewHost {
+  const agentGrid = h("div", { class: "chat-agent-grid" });
+  const agentOptions = h("div", {
+    class: "chat-agent-options",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-label": "Choose one or more ACT 3 bots",
+  });
+  const agentPicker = h("div", { class: "chat-agent-picker" });
+  const askTabs = h("div", {
+    class: "ask-tabs",
+    role: "tablist",
+    "aria-label": "Ask sections",
+  });
+  const chatPanel = h("div", {
+    class: "ask-inline-panel chat-tab-panel",
+    "data-ask-panel": "chat",
+    role: "tabpanel",
+  });
+  const askPanels = new Map<string, HTMLElement>([["chat", chatPanel]]);
+  const askTabButtons = new Map<string, HTMLButtonElement>();
+  let activeAskTab = "chat";
+  let syncAskPanel = () => {};
+  let tickAskPanel = (_nowMs: number) => {};
+  function selectAskTab(id: string) {
+    if (!askPanels.has(id)) return;
+    activeAskTab = id;
+    pickerOpen = false;
+    syncAgentOptions();
+    for (const [tabId, panel] of askPanels) {
+      panel.hidden = tabId !== id;
+      askTabButtons.get(tabId)?.setAttribute("aria-selected", String(tabId === id));
+      askTabButtons.get(tabId)?.classList.toggle("active", tabId === id);
+    }
+    if (id !== "chat") syncAskPanel();
+    State.notify();
+    onHeightChange();
+  }
+  function addAskTab(id: string, label: string, panel: HTMLElement) {
+    const button = h("button", {
+      class: "ask-tab",
+      type: "button",
+      role: "tab",
+      "aria-selected": "false",
+      "aria-controls": `ask-panel-${id}`,
+      text: label,
+      onclick: () => selectAskTab(id),
+    }) as HTMLButtonElement;
+    panel.id = `ask-panel-${id}`;
+    panel.classList.add("ask-inline-panel");
+    panel.hidden = true;
+    askPanels.set(id, panel);
+    askTabButtons.set(id, button);
+    askTabs.append(button);
+    chatPanel.parentElement?.append(panel);
+  }
+  const chatTabButton = h("button", {
+    class: "ask-tab active",
+    type: "button",
+    role: "tab",
+    "aria-selected": "true",
+    "aria-controls": "ask-panel-chat",
+    text: "Chat",
+    onclick: () => selectAskTab("chat"),
+  }) as HTMLButtonElement;
+  chatPanel.id = "ask-panel-chat";
+  askTabButtons.set("chat", chatTabButton);
+  askTabs.append(chatTabButton);
+  const selectedAgents: ChatAgentId[] = [State.chatAgent];
+  let pickerOpen = false;
+  let sending = false;
+  const replyingAgents = new Set<ChatAgentId>();
+  let agentSelectionChanged = false;
+  const agentTrigger = h("button", {
+    class: "chat-agent-trigger",
+    type: "button",
+    "aria-expanded": "false",
+    "aria-haspopup": "true",
+    title: "Choose one or more ACT 3 chat bots",
+  }) as HTMLButtonElement;
+  const agentButtons = new Map<ChatAgentId, HTMLButtonElement>();
+  const agentModels = new Map<ChatAgentId, HTMLElement>();
+  for (const agent of ["omniroute", "openrouter", "ollama"] as const) {
+    const details = CHAT_AGENTS[agent];
+    const modelLabel = h("small", { class: "chat-agent-model" });
+    const mascot = createMiniBot({
+      id: `chat-${agent}`,
+      name: details.name,
+      color: details.color,
+      state: "idle",
+      stepIndex: 0,
+      steps: [],
+      source: "agent",
+      isIntegration: false,
+    }, 28, null);
+    mascot.classList.add("chat-agent-mascot");
+    const button = h(
+      "button",
+      {
+        class: `chat-agent-button agent-${agent}`,
+        type: "button",
+        "aria-pressed": "false",
+        style: `--agent-color:${details.color}`,
+        title: `${details.name}: ${details.purpose}`,
+      },
+      h("span", { class: "chat-agent-check", "aria-hidden": "true" }),
+      mascot,
+      h("span", { class: "chat-agent-copy" },
+        h("strong", { text: details.name }),
+        h("small", { text: details.purpose }),
+        modelLabel,
+      ),
+    ) as HTMLButtonElement;
+    button.addEventListener("click", () => {
+      if (sending) return;
+      agentSelectionChanged = true;
+      const selectedIndex = selectedAgents.indexOf(agent);
+      if (selectedIndex >= 0) {
+        if (selectedAgents.length === 1) return;
+        selectedAgents.splice(selectedIndex, 1);
+        if (State.chatAgent === agent) State.setChatAgent(selectedAgents[0]);
+      } else {
+        selectedAgents.push(agent);
+        State.setChatAgent(agent);
+      }
+      syncAgentOptions();
+      State.notify();
+      onHeightChange();
+      input.focus();
+    });
+    agentButtons.set(agent, button);
+    agentModels.set(agent, modelLabel);
+    agentGrid.append(button);
+  }
+  const closePicker = h("button", {
+    class: "chat-agent-done",
+    type: "button",
+    text: "Done",
+    onclick: () => {
+      pickerOpen = false;
+      syncAgentOptions();
+      agentTrigger.focus();
+    },
+  });
+  agentOptions.append(
+    h("div", { class: "chat-agent-options-heading" },
+      h("div", {},
+        h("strong", { text: "Choose your ACT 3 bots" }),
+        h("small", {
+          class: "chat-agent-hint",
+          text: "Choose more than one to get separate answers. File edits use the primary bot.",
+        }),
+      ),
+      closePicker,
+    ),
+    agentGrid,
+  );
+  function syncAgentOptions() {
+    document.body.classList.toggle("chat-agent-picker-open", pickerOpen);
+    if (!agentSelectionChanged && selectedAgents[0] !== State.chatAgent) {
+      selectedAgents.splice(0, selectedAgents.length, State.chatAgent);
+    }
+    const names = selectedAgents.map((agent) => CHAT_AGENTS[agent].name);
+    agentTrigger.replaceChildren(
+      createMiniBot({
+        id: "chat-agent-trigger",
+        name: "ACT 3",
+        color: "#a78bfa",
+        state: "idle",
+        stepIndex: 0,
+        steps: [],
+        source: "agent",
+        isIntegration: false,
+      }, 22, null),
+      h("strong", { text: "ACT 3" }),
+      h("span", {
+        class: "chat-agent-selected-count",
+        text: `${selectedAgents.length} ${selectedAgents.length === 1 ? "bot" : "bots"}`,
+      }),
+      h("span", { class: "chat-agent-selected-dots", "aria-hidden": "true" },
+        ...selectedAgents.map((agent) => h("i", {
+          style: `background:${CHAT_AGENTS[agent].color}`,
+          title: CHAT_AGENTS[agent].name,
+        })),
+      ),
+    );
+    agentTrigger.setAttribute("aria-expanded", String(pickerOpen));
+    agentTrigger.title = `Selected: ${names.join(", ")}. Click to choose bots.`;
+    agentOptions.hidden = !pickerOpen;
+    for (const agent of ["omniroute", "openrouter", "ollama"] as const) {
+      const button = agentButtons.get(agent)!;
+      button.classList.toggle("selected", selectedAgents.includes(agent));
+      button.setAttribute("aria-pressed", String(selectedAgents.includes(agent)));
+      button.disabled = sending;
+      agentModels.get(agent)!.textContent = State.settings[CHAT_AGENTS[agent].modelSetting];
+    }
+  }
+  agentTrigger.addEventListener("click", () => {
+    pickerOpen = !pickerOpen;
+    syncAgentOptions();
+  });
+  document.addEventListener("act3:open-agent-picker", () => {
+    if (State.view !== "prompt" || pickerOpen) return;
+    pickerOpen = true;
+    syncAgentOptions();
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!pickerOpen || agentPicker.contains(event.target as Node)) return;
+    pickerOpen = false;
+    syncAgentOptions();
+  });
+  agentPicker.addEventListener("keydown", (event) => {
+    if ((event as KeyboardEvent).key !== "Escape" || !pickerOpen) return;
+    pickerOpen = false;
+    syncAgentOptions();
+    agentTrigger.focus();
+  });
+  agentPicker.append(agentTrigger, agentOptions);
+  syncAgentOptions();
   const chipRow = h("div", { class: "chip-row" });
+  const attachWindowStatus = h("span", { class: "chat-attach-status", "aria-live": "polite" });
+  const attachWindow = h("button", {
+    class: "chat-attach-window",
+    type: "button",
+    text: "Attach previous app/window",
+    title: "Attach only the app and window title. ACT 3 does not read website contents.",
+    onclick: () => {
+      if (State.attachedWindowContext || State.projectRootContext) {
+        State.attachedWindowContext = null;
+        State.attachedWindowCapture = null;
+        State.projectRootContext = null;
+        attachWindowStatus.textContent = "Attached context detached.";
+        State.notify();
+        onHeightChange();
+        return;
+      }
+      const context = State.previousWindowContext;
+      if (!context) {
+        attachWindowStatus.textContent = "No previous app window was captured. Open Ask from that app and try again.";
+        return;
+      }
+      State.attachedWindowContext = context;
+      State.attachedWindowCapture = null;
+      State.projectRootContext = null;
+      attachWindowStatus.textContent = `Attached ${context.appName}: ${context.title}`;
+      State.notify();
+      onHeightChange();
+    },
+  });
+  document.addEventListener("act3:attach-project-context", (event) => {
+    const root = (event as CustomEvent<{ root?: string }>).detail?.root?.trim();
+    if (!root) return;
+    State.projectRootContext = root;
+    State.attachedWindowContext = null;
+    State.attachedWindowCapture = null;
+    attachWindowStatus.textContent = `Attached project: ${root}`;
+    selectAskTab("chat");
+    State.notify();
+    onHeightChange();
+  });
+  const captureWindow = h("button", {
+    class: "chat-attach-window",
+    type: "button",
+    text: "Share app screenshot",
+    title: "Capture the previously active app window and attach its screenshot to this chat.",
+    onclick: async () => {
+      if (State.attachedWindowCapture) {
+        State.attachedWindowCapture = null;
+        attachWindowStatus.textContent = "Screenshot sharing stopped.";
+        State.notify();
+        onHeightChange();
+        return;
+      }
+      const context = State.previousWindowContext;
+      if (!context) {
+        attachWindowStatus.textContent = "No previous app window was captured. Open Ask from that app and try again.";
+        return;
+      }
+      attachWindowStatus.textContent = "Capturing the selected app window…";
+      try {
+        const capture = await Bridge.captureWindow(context.windowId);
+        State.attachedWindowContext = context;
+        State.attachedWindowCapture = capture;
+        State.projectRootContext = null;
+        attachWindowStatus.textContent = `Screenshot shared with selected bots · ${capture.width} × ${capture.height}`;
+        State.notify();
+        onHeightChange();
+      } catch (error) {
+        attachWindowStatus.textContent = `Could not capture window: ${String(error).replace(/^Error:\s*/, "")}`;
+      }
+    },
+  });
+  const windowPreview = h("div", { class: "chat-window-preview", hidden: true });
+  const attachWindowRow = h("div", { class: "chat-attach-row" },
+    attachWindow, captureWindow, attachWindowStatus, windowPreview);
   const log = h("div", { class: "chat-log" });
   const input = h("input", {
     type: "text",
@@ -51,20 +361,77 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   const send = h("button", { class: "send-btn", title: "Send" }, svg(ICONS.arrowUp, 11));
   const bar = h("div", { class: "chat-bar" }, input, send);
 
+  chatPanel.append(agentPicker, attachWindowRow, chipRow, log, bar);
   const el = h(
     "div",
     { class: "view" },
-    h("div", { class: "card wash chat-card" }, h("div", { class: "chat-body" }, chipRow, log, bar)),
+    h("div", { class: "card wash chat-card" },
+      h("div", { class: "chat-body" }, askTabs, chatPanel)),
   );
-  (el.querySelector(".card") as HTMLElement).style.setProperty("--wash", "rgba(99,102,241,0.5)");
+  const reviewContents = h("div", { class: "code-review-popup-content" });
+  const reviewDialog = h("section", {
+    class: "code-review-popup",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-labelledby": "code-review-popup-title",
+  },
+    h("header", { class: "code-review-popup-header" },
+      h("div", {},
+        h("span", { class: "code-review-popup-eyebrow", text: "APPROVAL REQUIRED" }),
+        h("h2", { id: "code-review-popup-title", text: "Review code changes" }),
+      ),
+      h("button", {
+        class: "code-review-popup-close",
+        type: "button",
+        text: "Review later",
+        onclick: () => dismissCodeReview(),
+      }),
+    ),
+    reviewContents,
+  );
+  const reviewOverlay = h("div", {
+    class: "code-review-overlay",
+    hidden: true,
+    onclick: (event: Event) => {
+      if (event.target === reviewOverlay) dismissCodeReview();
+    },
+  }, reviewDialog);
+  el.append(reviewOverlay);
+  let reviewOnDismiss: (() => void) | null = null;
+  function dismissCodeReview() {
+    if (reviewOverlay.hidden) return;
+    reviewOverlay.hidden = true;
+    reviewOverlay.classList.remove("visible");
+    reviewOnDismiss?.();
+    reviewOnDismiss = null;
+    clear(reviewContents);
+    onHeightChange();
+    input.focus();
+  }
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !reviewOverlay.hidden) {
+      event.preventDefault();
+      dismissCodeReview();
+    }
+  });
+  for (const [id, panel] of askPanels) {
+    panel.hidden = id !== "chat";
+  }
+  const card = el.querySelector(".card") as HTMLElement;
+  card.style.setProperty("--wash", "rgba(167,139,250,0.38)");
 
-  let sending = false;
-  let renderedCount = -1;
+  let renderedKey = "";
+  let renderedMessageIds = new Set<number>();
+  let renderedWindowCapture: typeof State.attachedWindowCapture = null;
   let appliedPrefill = false;
 
   async function submit() {
     const query = input.value.trim();
     if (!query || sending) return;
+    if (pickerOpen) {
+      pickerOpen = false;
+      syncAgentOptions();
+    }
     const active = State.activeDocument;
     if (/^(?:(?:please|can you|could you)\s+)?(?:open|show)\s+(?:this|it|that|the (?:file|document|note))(?:\s+please)?[.!?]*$/i.test(query)) {
       if (!active) {
@@ -87,33 +454,73 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
 
     input.value = "";
     sending = true;
+    const isWritingActiveFile = Boolean(
+      active && /\b(?:write|type|put|draft|compose|add|replace|update)\b/i.test(query) &&
+      /\b(?:in|into)\s+(?:that|this|the)\s+(?:notepad|file|document|note)\b/i.test(query),
+    );
+    const targets = isWritingActiveFile ? [State.chatAgent] : [...selectedAgents];
+    targets.forEach((agent) => replyingAgents.add(agent));
     Sound.play("send");
 
-    State.chatHistory.push({ id: nextId++, role: "user", content: query });
+    const userMessage = { id: nextId++, role: "user" as const, content: query };
+    for (const agent of targets) State.chatHistories[agent].push(userMessage);
     State.stateOverride = "thinking";
     State.notify();
     onHeightChange();
 
+    const files = State.droppedFiles;
     const file = State.droppedFile;
-    const writeToActiveFile = Boolean(
-      active && /\b(?:write|type|put|draft|compose|add|replace|update)\b/i.test(query) &&
-      /\b(?:in|into)\s+(?:that|this|the)\s+(?:notepad|file|document|note)\b/i.test(query),
-    );
-    const context: ChatContext | null = file
+    const writeToActiveFile = isWritingActiveFile;
+    const context: ChatContext | null = State.projectRootContext
+      ? { kind: "project", root: State.projectRootContext }
+      : State.attachedWindowContext
+      ? {
+        kind: "window",
+        ...State.attachedWindowContext,
+        ...(State.attachedWindowCapture
+          ? { screenshotBase64: State.attachedWindowCapture.pngBase64 }
+          : {}),
+      }
+      : files.length > 1
+      ? { kind: "files", files }
+      : file
       ? { kind: "file", name: file.name, path: file.path, ...(writeToActiveFile && active ? { writePath: active.path } : {}) }
       : writeToActiveFile && active
-        ? { kind: "file", name: active.name, path: active.path, writePath: active.path }
+      ? { kind: "file", name: active.name, path: active.path, writePath: active.path }
       : null;
 
     try {
-      const reply: ChatReply = await Bridge.chatSend(query, context);
-      State.chatHistory.push({
-        id: nextId++,
-        role: "assistant",
-        content: reply.writtenFile
-          ? `${reply.text}\n\nSaved the updated text to ${reply.writtenFile}.`
-          : reply.text,
-      });
+      await Promise.all(targets.map(async (agent) => {
+        const activityId = `chat:${agent}`;
+        State.startCodeActivity(activityId, CHAT_AGENTS[agent].name, "Chat", "Request sent to selected provider");
+        try {
+          const reply: ChatReply = await Bridge.chatSend(query, context, agent);
+          State.finishCodeActivity(
+            activityId,
+            "Chat",
+            false,
+            `Response received · ${reply.text.length.toLocaleString()} characters`,
+          );
+          State.chatHistories[agent].push({
+            id: nextId++,
+            role: "assistant",
+            content: reply.writtenFile
+              ? `${reply.text}\n\nSaved the updated text to ${reply.writtenFile}.`
+              : reply.text,
+          });
+        } catch (err) {
+          State.chatHistories[agent].push({
+            id: nextId++,
+            role: "assistant",
+            content: `Could not reach ${CHAT_AGENTS[agent].name}: ${String(err).replace(/^Error:\s*/, "")}`,
+          });
+          State.finishCodeActivity(activityId, "Chat", true, "Provider request failed");
+        } finally {
+          replyingAgents.delete(agent);
+          State.notify();
+          onHeightChange();
+        }
+      }));
       State.stateOverride = null;
       Sound.play("finish");
     } catch (err) {
@@ -122,6 +529,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
       State.view = "note";
       Sound.play("error");
     } finally {
+      replyingAgents.clear();
       sending = false;
       State.notify();
       onHeightChange();
@@ -130,6 +538,9 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   }
 
   send.addEventListener("click", () => void submit());
+  input.addEventListener("input", () => {
+    send.disabled = sending || !input.value.trim();
+  });
   input.addEventListener("keydown", (e) => {
     if ((e as KeyboardEvent).key === "Enter") {
       e.preventDefault();
@@ -140,36 +551,130 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
 
   return {
     el,
+    showCodeReview(content, onDismiss) {
+      clear(reviewContents);
+      reviewContents.append(content);
+      reviewOnDismiss = onDismiss;
+      reviewOverlay.hidden = false;
+      requestAnimationFrame(() => {
+        reviewOverlay.classList.add("visible");
+        reviewContents.querySelector<HTMLButtonElement>("button")?.focus();
+      });
+      onHeightChange();
+    },
+    dismissCodeReview() {
+      dismissCodeReview();
+    },
+    selectAskPanel(id) {
+      selectAskTab(id);
+    },
+    attachAskPanels(panels, sync, tick) {
+      syncAskPanel = sync;
+      tickAskPanel = tick;
+      for (const panel of panels) addAskTab(panel.id, panel.label, panel.element);
+    },
+    tick(nowMs) {
+      if (activeAskTab !== "chat") tickAskPanel(nowMs);
+    },
     sync() {
+      if (State.view !== "prompt" && pickerOpen) pickerOpen = false;
       if (!appliedPrefill && State.promptPrefill) {
         input.value = State.promptPrefill;
         State.promptPrefill = "";
         appliedPrefill = true;
       }
+      syncAgentOptions();
+      if (activeAskTab !== "chat") syncAskPanel();
+      card.style.setProperty(
+        "--wash",
+        State.chatAgent === "omniroute" ? "rgba(167,139,250,0.38)"
+          : State.chatAgent === "openrouter" ? "rgba(251,146,60,0.34)"
+            : "rgba(52,211,153,0.32)",
+      );
+      bar.style.setProperty("--agent-color", CHAT_AGENTS[State.chatAgent].color);
       const file = State.droppedFile;
-      const wantChip = State.activeDocument?.name ?? file?.name ?? "";
+      const wantChip = State.projectRootContext
+        ? `Project · ${State.projectRootContext.split(/[\\/]/).filter(Boolean).pop() ?? State.projectRootContext}`
+        : State.attachedWindowContext
+        ? `${State.attachedWindowContext.appName} · ${State.attachedWindowContext.title}`
+        : State.droppedFiles.length > 1
+        ? `${State.droppedFiles.length} documents`
+        : State.activeDocument?.name ?? file?.name ?? "";
       if (chipRow.dataset.label !== wantChip) {
         chipRow.dataset.label = wantChip;
         clear(chipRow);
         if (wantChip) chipRow.append(contextChip(wantChip));
       }
+      attachWindow.textContent = State.attachedWindowContext || State.projectRootContext
+        ? "Detach context"
+        : "Attach previous app/window";
+      captureWindow.textContent = State.attachedWindowCapture
+        ? "Stop sharing screenshot"
+        : "Share app screenshot";
+      captureWindow.disabled = !State.attachedWindowCapture && !State.previousWindowContext;
+      if (State.attachedWindowCapture) {
+        if (State.attachedWindowCapture !== renderedWindowCapture) {
+          renderedWindowCapture = State.attachedWindowCapture;
+          const image = h("img", {
+            class: "chat-window-preview-image",
+            src: `data:image/png;base64,${State.attachedWindowCapture.pngBase64}`,
+            alt: `Screenshot of ${State.attachedWindowCapture.appName}: ${State.attachedWindowCapture.title}`,
+          }) as HTMLImageElement;
+          clear(windowPreview);
+          windowPreview.append(
+            image,
+            h("span", {
+              class: "chat-window-preview-note",
+              text: "The screenshot is shared when you send a message or request an app action. Cloud bots send it to their configured provider.",
+            }),
+          );
+        }
+        windowPreview.hidden = false;
+      } else {
+        renderedWindowCapture = null;
+        windowPreview.hidden = true;
+        clear(windowPreview);
+      }
 
       const thinking = State.stateOverride === "thinking";
-      const count = State.chatHistory.length + (thinking ? 0.5 : 0);
-      if (count !== renderedCount) {
-        renderedCount = count;
+      const visibleMessages = selectedAgents.flatMap((agent) =>
+        State.chatHistories[agent].map((message) => ({ agent, message })),
+      ).sort((a, b) => a.message.id - b.message.id);
+      const seenUserMessages = new Set<number>();
+      const distinctMessages = visibleMessages.filter(({ message }) => {
+        if (message.role !== "user") return true;
+        if (seenUserMessages.has(message.id)) return false;
+        seenUserMessages.add(message.id);
+        return true;
+      });
+      const pendingAgents = [...replyingAgents].filter((agent) => selectedAgents.includes(agent));
+      const key = `${selectedAgents.join(",")}:${distinctMessages.map(({ agent, message }) => `${agent}:${message.id}`).join(",")}:${pendingAgents.join(",")}:${thinking}`;
+      if (key !== renderedKey) {
+        renderedKey = key;
         clear(log);
-        for (const m of State.chatHistory) log.append(bubble(m));
-        if (thinking) log.append(typingDots());
+        distinctMessages.forEach(({ agent, message }) => {
+          log.append(bubble(message, agent, !renderedMessageIds.has(message.id)));
+        });
+        renderedMessageIds = new Set(distinctMessages.map(({ message }) => message.id));
+        pendingAgents.forEach((agent) => log.append(typingDots(agent)));
         log.scrollTop = log.scrollHeight;
       }
 
-      input.placeholder = State.chatHistory.length === 0
+      input.placeholder = distinctMessages.length === 0
         ? "Ask me anything…"
         : State.activeDocument
           ? "Ask about it, or say “write in this file…”"
           : "Continue…";
       input.disabled = sending;
+      bar.classList.toggle("is-sending", sending);
+      send.disabled = sending || !input.value.trim();
+      send.setAttribute("aria-label", sending ? "Waiting for replies" : "Send message");
+      send.title = sending ? "Waiting for replies" : "Send";
+      for (const [id, panel] of askPanels) {
+        panel.hidden = id !== activeAskTab;
+        askTabButtons.get(id)?.setAttribute("aria-selected", String(id === activeAskTab));
+        askTabButtons.get(id)?.classList.toggle("active", id === activeAskTab);
+      }
     },
     focus() {
       input.focus();

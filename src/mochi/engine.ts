@@ -218,6 +218,7 @@ export class BotEngine {
   lastTime = now();
   private t0 = now() - Math.random() * 5;
   private nextBlink = now() + 1.5 + Math.random() * 2;
+  private nextAmbientEmote = now() + 8 + Math.random() * 14;
   waveUntil = 0;
   waveStart = 0;
   private greetToken = 0;
@@ -226,7 +227,7 @@ export class BotEngine {
   private miniLookTarget = { x: 0, y: 0 };
   private miniLookNextTime = 0;
 
-  /** Fired when three slaps land inside 1.7 s (→ dizzy + confused view). */
+  /** Fired when three slaps land inside 3.5 s (→ dizzy + confused view). */
   onDizzy: (() => void) | null = null;
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -313,7 +314,7 @@ export class BotEngine {
     this.interruptGreet();
     if (this.state === "dizzy") return;
     const t = now();
-    this.slapTimes = this.slapTimes.filter((s) => t - s < 1.7);
+    this.slapTimes = this.slapTimes.filter((s) => t - s < 3.5);
     this.slapTimes.push(t);
     Sound.play("slap");
     this.squash();
@@ -390,10 +391,10 @@ export class BotEngine {
     this.miniNextBehavior = now() + 0.8 + Math.random() * 1.7;
   }
 
-  triggerEmote(emote: BotEmoteName, duration = 1.8) {
+  triggerEmote(emote: BotEmoteName, duration = 1.8, playSound = true) {
     const t = now();
     const sound = EMOTE_SOUND[emote];
-    if (sound) Sound.play(sound);
+    if (playSound && sound) Sound.play(sound);
     this.eyeOverride = EMOTE_EYE[emote];
     this.eyeOverrideUntil = t + duration;
 
@@ -594,6 +595,16 @@ export class BotEngine {
     if (this.eyeOverride && n > this.eyeOverrideUntil) {
       this.eyeOverride = this.permanentEye;
       if (this.permanentEye) this.eyeOverrideUntil = Number.POSITIVE_INFINITY;
+    }
+
+    if (!this.isMini && n > this.nextAmbientEmote) {
+      if (this.state === "idle" && !this.permanentEmote && n >= this.eyeOverrideUntil) {
+        const emotes: BotEmoteName[] = ["happy", "surprised", "proud", "wink", "love"];
+        this.triggerEmote(emotes[Math.floor(Math.random() * emotes.length)], 1.4 + Math.random() * 0.8, false);
+        this.nextAmbientEmote = n + 24 + Math.random() * 36;
+      } else {
+        this.nextAmbientEmote = n + 3 + Math.random() * 5;
+      }
     }
 
     if (n - this.lastAmbient > 1.3) {

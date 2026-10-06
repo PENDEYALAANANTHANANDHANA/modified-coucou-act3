@@ -169,6 +169,125 @@ function claudeSection(status: HookStatus): HTMLElement {
   return section;
 }
 
+function mcpSection(): HTMLElement {
+  const name = h("input", { class: "text-input", placeholder: "Display name, e.g. Local calendar" }) as HTMLInputElement;
+  const command = h("input", { class: "text-input", placeholder: "Executable path, e.g. C:\\Tools\\my-mcp.exe" }) as HTMLInputElement;
+  const args = h("input", { class: "text-input", placeholder: 'Arguments as JSON array, e.g. ["--stdio"]' }) as HTMLInputElement;
+  const status = h("div", { class: "hint", text: "No MCP servers configured." });
+  const servers = h("div", { class: "mcp-servers" });
+  const section = h("section", {},
+    h("h2", {}, statusDot(false), h("span", { text: "App integrations (MCP)" })),
+    h("div", {
+      class: "notice warn",
+      text: "Only add MCP programs you trust. ACT 3 starts the configured executable with your Windows account permissions. Tool calls must be reviewed and approved from Tools.",
+    }),
+    h("div", { class: "hint", text: "Local stdio servers only. ACT 3 passes the executable and arguments directly; it does not run them through a shell." }),
+    h("label", { text: "Server name" }), name,
+    h("label", { text: "Executable" }), command,
+    h("label", { text: "Arguments (JSON array)" }), args,
+    h("div", { class: "row" },
+      h("button", {
+        class: "primary",
+        text: "Add MCP server",
+        onclick: async () => {
+          const serverName = name.value.trim();
+          const executable = command.value.trim();
+          if (!serverName || !executable) {
+            status.textContent = "Enter a server name and executable.";
+            return;
+          }
+          let serverArgs: unknown;
+          try {
+            serverArgs = args.value.trim() ? JSON.parse(args.value) : [];
+          } catch {
+            status.textContent = "Arguments must be a valid JSON array of strings.";
+            return;
+          }
+          if (!Array.isArray(serverArgs) || serverArgs.some((arg) => typeof arg !== "string")) {
+            status.textContent = "Arguments must be a valid JSON array of strings.";
+            return;
+          }
+          settings.mcpServers ??= [];
+          if (settings.mcpServers.length >= 8) {
+            status.textContent = "You can configure up to 8 MCP servers.";
+            return;
+          }
+          settings.mcpServers.push({
+            id: crypto.randomUUID(),
+            name: serverName.slice(0, 80),
+            command: executable.slice(0, 4096),
+            args: serverArgs.slice(0, 64),
+            enabled: true,
+          });
+          try {
+            await save();
+            name.value = "";
+            command.value = "";
+            args.value = "";
+            render();
+            status.textContent = "MCP server saved. Open Tools to discover its tools.";
+          } catch (error) {
+            status.textContent = `Could not save MCP server: ${String(error).replace(/^Error:\\s*/, "")}`;
+          }
+        },
+      }),
+    ),
+    servers,
+    status,
+  );
+
+  function render() {
+    clear(servers);
+    const configured = settings.mcpServers ?? [];
+    if (!configured.length) {
+      status.textContent = "No MCP servers configured.";
+      return;
+    }
+    for (const server of configured) {
+      const label = h("span", {
+        class: "hint",
+        text: `${server.enabled ? "Enabled" : "Disabled"} · ${server.command} ${server.args.join(" ")}`.trim(),
+      });
+      const toggleButton = h("button", {
+        class: "secondary",
+        text: server.enabled ? "Disable" : "Enable",
+        onclick: async () => {
+          server.enabled = !server.enabled;
+          try {
+            await save();
+            render();
+          } catch (error) {
+            server.enabled = !server.enabled;
+            status.textContent = `Could not update server: ${String(error).replace(/^Error:\\s*/, "")}`;
+          }
+        },
+      });
+      const removeButton = h("button", {
+        class: "danger",
+        text: "Remove",
+        onclick: async () => {
+          settings.mcpServers = configured.filter((item) => item.id !== server.id);
+          try {
+            await save();
+            render();
+          } catch (error) {
+            settings.mcpServers = configured;
+            status.textContent = `Could not remove server: ${String(error).replace(/^Error:\\s*/, "")}`;
+          }
+        },
+      });
+      servers.append(h("div", { class: "mcp-server-row" },
+        h("strong", { text: server.name }),
+        label,
+        toggleButton,
+        removeButton,
+      ));
+    }
+  }
+  render();
+  return section;
+}
+
 // ── AI provider section ───────────────────────────────────────────────────────
 
 const MODELS: [string, string][] = [
@@ -184,7 +303,7 @@ function apiSection(): HTMLElement {
 
   // ── Ollama status card ──────────────────────────────────────────────────
   const ollamaEndpoint = h("span", { class: "path", text: settings.ollamaUrl || "http://127.0.0.1:11434" });
-  const ollamaSelectedModel = h("span", { class: "hint", text: settings.model });
+  const ollamaSelectedModel = h("span", { class: "hint", text: settings.ollamaModel });
   const ollamaActiveDot = statusDot(false);
   const ollamaActiveLabel = h("span", { class: "hint", text: "checking…" });
   const ollamaModelCount = h("span", { class: "hint", text: "—" });
@@ -226,7 +345,7 @@ function apiSection(): HTMLElement {
 
   const ollamaCard = h(
     "div",
-    { style: "background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px" },
+    { class: "provider-status-card ollama-status-card" },
     h("div", { style: "font:600 12px var(--font);color:var(--ink);display:flex;align-items:center;gap:6px" },
       h("span", { text: "Ollama" }),
     ),
@@ -256,7 +375,7 @@ function apiSection(): HTMLElement {
 
   const onlineStatusCard = h(
     "div",
-    { style: "background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px" },
+    { class: "provider-status-card" },
     h("div", { style: "font:600 12px var(--font);color:var(--ink)" }, h("span", { text: "Online provider key status" })),
     h("div", { style: "display:flex;flex-wrap:wrap;gap:6px" }, openaiBadge, openrouterBadge, omnirouteBadge),
   );
@@ -281,7 +400,7 @@ function apiSection(): HTMLElement {
       ollamaActiveLabel.textContent = s.ollama;
       ollamaActiveLabel.style.color = "";
       ollamaEndpoint.textContent = settings.ollamaUrl || "http://127.0.0.1:11434";
-      ollamaSelectedModel.textContent = settings.model;
+      ollamaSelectedModel.textContent = settings.ollamaModel;
       detectedOllamaModels = s.ollamaModels;
       updateModelOptions();
       const countMatch = s.ollama.match(/(\d+)\s*model/);
@@ -372,15 +491,21 @@ function apiSection(): HTMLElement {
     style: "flex:1 1 auto;min-width:0",
   }) as HTMLInputElement;
 
+  const selectedModel = () => settings.provider === "ollama"
+    ? settings.ollamaModel
+    : settings.provider === "omniroute" ? settings.omnirouteModel
+      : settings.provider === "openrouter" ? settings.openrouterModel : settings.model;
+
   function updateModelOptions() {
     clear(modelOptions);
     const suggestions = settings.provider === "ollama"
       ? [...detectedOllamaModels]
       : settings.provider === "openrouter" ? MODELS.map(([id]) => id) : [];
-    if (settings.model && !suggestions.includes(settings.model)) suggestions.unshift(settings.model);
+    const current = selectedModel();
+    if (current && !suggestions.includes(current)) suggestions.unshift(current);
     for (const name of suggestions) modelOptions.append(h("option", { value: name }));
-    model.value = settings.model;
-    ollamaSelectedModel.textContent = settings.model;
+    model.value = current;
+    ollamaSelectedModel.textContent = settings.ollamaModel;
   }
   updateModelOptions();
   const keyName = () => settings.provider === "openrouter" ? "openrouter-api-key"
@@ -434,19 +559,24 @@ function apiSection(): HTMLElement {
   model.addEventListener("change", () => {
     const value = model.value.trim();
     if (!value) {
-      model.value = settings.model;
+      model.value = selectedModel();
       return;
     }
+    if (settings.provider === "ollama") settings.ollamaModel = value;
+    else if (settings.provider === "omniroute") settings.omnirouteModel = value;
+    else if (settings.provider === "openrouter") settings.openrouterModel = value;
+    else settings.model = value;
     settings.model = value;
-    ollamaSelectedModel.textContent = settings.model;
+    ollamaSelectedModel.textContent = settings.ollamaModel;
     updateModelOptions();
     void save();
   });
   model.addEventListener("input", () => {
-    ollamaSelectedModel.textContent = model.value;
+    if (settings.provider === "ollama") ollamaSelectedModel.textContent = model.value;
   });
   provider.addEventListener("change", async () => {
     settings.provider = provider.value as Settings["provider"];
+    settings.model = selectedModel();
     endpoint.value = endpointValue();
     endpoint.placeholder = settings.provider === "ollama"
       ? "http://127.0.0.1:11434"
@@ -508,7 +638,7 @@ function apiSection(): HTMLElement {
 
   return h(
     "section",
-    {},
+    { class: "settings-section provider-section" },
     h("h2", {}, dot, h("span", { text: "AI provider" })),
     h("div", { class: "row" }, refreshAllBtn, openSettingsBtn),
     ollamaCard,
@@ -828,9 +958,16 @@ async function main() {
 
   clear(root);
   root.append(
-    h("h1", {}, h("span", { text: "ACT 3" }), h("span", { class: "version", text: version })),
+    h("header", { class: "settings-brand" },
+      h("div", { class: "settings-brand-mark", "aria-hidden": "true" }, "3"),
+      h("div", {},
+        h("h1", {}, h("span", { text: "ACT 3" }), h("span", { class: "version", text: version })),
+        h("p", { class: "settings-subtitle", text: "Companion settings · Private by design" }),
+      ),
+    ),
     claudeSection(status),
     apiSection(),
+    mcpSection(),
     updaterSection(),
     integrationsSection(present),
     generalSection(),

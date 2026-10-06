@@ -6,6 +6,7 @@ mod hooks;
 mod integrations;
 mod island;
 mod log;
+mod mcp;
 mod pipe;
 mod platform;
 mod secrets;
@@ -92,8 +93,8 @@ fn system_idle_seconds() -> Result<u64, String> {
     platform::system_idle_seconds()
 }
 
-/// Hidden island → shrink the window to the invisible wake strip and park the
-/// cursor poll; anything else → full panel and 60 Hz polling.
+/// Hidden island → shrink to the invisible wake strip where supported; otherwise
+/// retain the full transparent panel. Windows keeps polling for file drags.
 #[tauri::command]
 fn set_collapsed(app: AppHandle, shared: State<Shared>, collapsed: bool) {
     let pref = shared.settings.lock().unwrap().screen.clone();
@@ -101,7 +102,9 @@ fn set_collapsed(app: AppHandle, shared: State<Shared>, collapsed: bool) {
     island::apply_geometry(&app, &pref, collapsed);
     // The wake strip must always take the mouse, and a resize invalidates the flag.
     island::refresh_click_through(&app, &shared.gate);
-    shared.gate.set_active(!collapsed);
+    // Windows keeps a full-size transparent panel while collapsed. Keep the
+    // cursor poll alive there so a file drag can temporarily make it a target.
+    shared.gate.set_active(!collapsed || platform::CURSOR_POLL);
 }
 
 /// The front end pushes the island shape; Rust decides click-through from it.
@@ -115,12 +118,56 @@ fn set_island_rect(app: AppHandle, shared: State<Shared>, x: f64, y: f64, width:
 }
 
 #[tauri::command]
-fn focus_window(app: AppHandle, focused: bool) {
-    let Some(win) = island::window(&app) else { return };
+fn focus_window(app: AppHandle, focused: bool) -> Option<platform::WindowContext> {
+    let Some(win) = island::window(&app) else { return None };
+    let context = focused.then(|| {
+        platform::foreground_window_context(win.hwnd().ok().map(|hwnd| hwnd.0 as isize))
+    }).flatten();
     platform::set_activating(&win, focused);
     if focused {
         let _ = win.set_focus();
     }
+    context
+}
+
+#[tauri::command]
+fn capture_window(window_id: isize) -> Result<platform::WindowCapture, String> {
+    platform::capture_window(window_id)
+}
+
+#[tauri::command]
+fn perform_window_action(
+    window_id: isize,
+    expected_app_name: String,
+    expected_title: String,
+    expected_width: u32,
+    expected_height: u32,
+    action: platform::WindowAction,
+    approved: bool,
+) -> Result<(), String> {
+    if !approved {
+        return Err("Desktop action was not approved.".into());
+    }
+    platform::perform_window_action(
+        window_id,
+        &expected_app_name,
+        &expected_title,
+        expected_width,
+        expected_height,
+        action,
+    )
+}
+
+#[tauri::command]
+async fn propose_window_action(
+    shared: State<'_, Shared>,
+    instruction: String,
+    capture: platform::WindowCapture,
+    agent: claude::ChatAgentId,
+) -> Result<claude::WindowActionProposal, String> {
+    let mut settings = shared.settings.lock().unwrap().clone();
+    agent.configure(&mut settings);
+    claude::propose_window_action(&settings, instruction, capture).await
 }
 
 #[tauri::command]
@@ -184,6 +231,29 @@ fn open_in_vscode(path: Option<String>) -> bool {
 }
 
 #[tauri::command]
+fn open_project_in_editor(path: String, editor: String) -> Result<(), String> {
+    let folder = std::path::Path::new(&path);
+    if !(folder.is_absolute() && folder.is_dir()) {
+        return Err("Choose an existing project folder first.".into());
+    }
+    let command = match editor.as_str() {
+        "vscode" => "code",
+        "cursor" => "cursor",
+        "system" => {
+            return platform::reveal_path(&path);
+        }
+        _ => return Err("Choose VS Code, Cursor, or the system file manager.".into()),
+    };
+    let executable = platform::find_on_path(command)
+        .ok_or_else(|| format!("{command} was not found on PATH. Choose another editor or add its command-line launcher."))?;
+    platform::no_console(&mut Command::new(executable))
+        .arg(&path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Could not open the project in {command}: {error}"))
+}
+
+#[tauri::command]
 fn quit_app(app: AppHandle) {
     app.exit(0);
 }
@@ -234,6 +304,15 @@ fn approval_decision(app: AppHandle, request_id: String, decision: String) {
     pipe::answer(&app, &request_id, &decision);
 }
 
+#[tauri::command]
+fn question_answer(
+    app: AppHandle,
+    request_id: String,
+    answers: serde_json::Value,
+) -> Result<(), String> {
+    pipe::answer_question(&app, &request_id, answers)
+}
+
 /// The island has the card on screen, so the long wait for a human may begin.
 /// Until this arrives the relay only waits a few hundred milliseconds, which is
 /// what stops a paused or unresponsive island from freezing Claude Code.
@@ -254,13 +333,34 @@ fn approval_decline(app: AppHandle, request_id: String) {
 /// One chat turn. The API key and any file bytes stay on the Rust side.
 #[tauri::command]
 async fn chat_send(
+    app: AppHandle,
     shared: State<'_, Shared>,
     chat: State<'_, Chat>,
+    pending_mcp: State<'_, mcp::PendingApprovals>,
     query: String,
     context: Option<ChatContext>,
+    agent: claude::ChatAgentId,
 ) -> Result<ChatReply, String> {
-    let settings = shared.settings.lock().unwrap().clone();
-    claude::send(&chat, &settings, query, context).await
+    let mut settings = shared.settings.lock().unwrap().clone();
+    agent.configure(&mut settings);
+    claude::send_with_mcp(
+        &app,
+        &pending_mcp,
+        &chat,
+        &settings,
+        query,
+        context,
+    )
+    .await
+}
+
+#[tauri::command]
+fn mcp_approval_decision(
+    pending: State<'_, mcp::PendingApprovals>,
+    request_id: String,
+    allow: bool,
+) -> Result<(), String> {
+    mcp::decide(&pending, &request_id, allow)
 }
 
 #[tauri::command]
@@ -285,9 +385,11 @@ async fn run_custom_task(
 
 #[tauri::command]
 async fn generate_code_changes(
+    app: AppHandle,
     shared: State<'_, Shared>,
     root: String,
     instructions: String,
+    request_id: String,
 ) -> Result<safe_tools::CodeProposal, String> {
     if instructions.trim().is_empty() {
         return Err("Describe the code change you want.".into());
@@ -296,7 +398,78 @@ async fn generate_code_changes(
         return Err("Code instructions must be 4,000 bytes or fewer.".into());
     }
     let settings = shared.settings.lock().unwrap().clone();
-    claude::generate_code_changes(&settings, root, instructions).await
+    let progress_app = app.clone();
+    let progress_request_id = request_id.clone();
+    let progress = move |stage: &str, detail: &str| {
+        progress_app
+            .emit(
+                "act3:code-generation-progress",
+                CodeGenerationProgress {
+                    request_id: progress_request_id.clone(),
+                    stage: stage.to_string(),
+                    detail: detail.to_string(),
+                },
+            )
+            .map_err(|error| format!("Could not update code-generation progress: {error}"))
+    };
+    match claude::generate_code_changes_with_progress(&settings, root, instructions, progress).await {
+        Ok(proposal) => Ok(proposal),
+        Err(error) => {
+            let _ = app.emit(
+                "act3:code-generation-progress",
+                CodeGenerationProgress {
+                    request_id,
+                    stage: "failed".into(),
+                    detail: error.clone(),
+                },
+            );
+            Err(error)
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CodeGenerationProgress {
+    request_id: String,
+    stage: String,
+    detail: String,
+}
+
+#[tauri::command]
+async fn summarize_project(
+    shared: State<'_, Shared>,
+    root: String,
+) -> Result<String, String> {
+    let settings = shared.settings.lock().unwrap().clone();
+    claude::summarize_project(&settings, root).await
+}
+
+#[tauri::command]
+async fn mcp_list_tools(settings: State<'_, Shared>, server_id: String) -> Result<Vec<mcp::McpTool>, String> {
+    let server = settings.settings.lock().unwrap().mcp_servers.iter()
+        .find(|server| server.id == server_id)
+        .cloned()
+        .ok_or_else(|| "That MCP server is not configured.".to_string())?;
+    mcp::list_tools(&server).await
+}
+
+#[tauri::command]
+async fn mcp_call_tool(
+    settings: State<'_, Shared>,
+    server_id: String,
+    tool_name: String,
+    arguments: serde_json::Value,
+    approved: bool,
+) -> Result<String, String> {
+    if !approved {
+        return Err("Tool call was not approved.".into());
+    }
+    let server = settings.settings.lock().unwrap().mcp_servers.iter()
+        .find(|server| server.id == server_id)
+        .cloned()
+        .ok_or_else(|| "That MCP server is not configured.".to_string())?;
+    mcp::call_tool(&server, &tool_name, arguments).await
 }
 
 #[tauri::command]
@@ -350,6 +523,12 @@ async fn test_provider(shared: State<'_, Shared>, provider: Option<String>) -> R
     if let Some(provider) = provider {
         settings.provider = provider;
     }
+    settings.model = match settings.provider.as_str() {
+        "ollama" => settings.ollama_model.clone(),
+        "omniroute" => settings.omniroute_model.clone(),
+        "openrouter" => settings.openrouter_model.clone(),
+        _ => settings.model,
+    };
     claude::test_provider(&settings).await
 }
 
@@ -373,7 +552,7 @@ async fn provider_status(shared: State<'_, Shared>) -> Result<ProviderStatus, St
     };
     Ok(ProviderStatus {
         ollama,
-        ollama_model: settings.model,
+        ollama_model: settings.ollama_model,
         ollama_models,
         openai_key: secrets::present("online-api-key"),
         openrouter_key: secrets::present("openrouter-api-key"),
@@ -421,6 +600,11 @@ async fn check_for_update(app: AppHandle) -> Result<UpdateStatus, String> {
 #[tauri::command]
 fn ingest_file(path: String) -> Result<DroppedFile, String> {
     files::ingest(&path)
+}
+
+#[tauri::command]
+fn ingest_files(paths: Vec<String>) -> Result<Vec<DroppedFile>, String> {
+    files::ingest_many(&paths)
 }
 
 /// The island may only ask whether a key exists — never read it.
@@ -541,11 +725,13 @@ pub fn run() {
             let _ = app.emit_to(island::WINDOW_LABEL, "tray", "open".to_string());
         }))
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_dialog::init())
         .manage(Shared {
             settings: Mutex::new(loaded.clone()),
             gate: gate.clone(),
         })
         .manage(Pending::default())
+        .manage(mcp::PendingApprovals::default())
         .manage(Chat::default())
         .invoke_handler(tauri::generate_handler![
             boot,
@@ -554,21 +740,30 @@ pub fn run() {
             set_collapsed,
             set_island_rect,
             focus_window,
+            capture_window,
+            perform_window_action,
+            propose_window_action,
             reposition,
             open_url,
             open_local_path,
             open_in_vscode,
+            open_project_in_editor,
             quit_app,
             hooks_status,
             hooks_preview,
             hooks_apply,
             approval_decision,
+            question_answer,
             approval_ack,
             approval_decline,
             log_line,
             chat_send,
+            mcp_approval_decision,
             run_custom_task,
             generate_code_changes,
+            summarize_project,
+            mcp_list_tools,
+            mcp_call_tool,
             apply_code_changes,
             search_files,
             read_text_file,
@@ -580,6 +775,7 @@ pub fn run() {
             provider_status,
             check_for_update,
             ingest_file,
+            ingest_files,
             secret_present,
             secret_set,
             secret_clear,

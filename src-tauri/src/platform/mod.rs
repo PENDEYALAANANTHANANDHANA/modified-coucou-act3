@@ -4,6 +4,7 @@
 // API directly. Each OS file exposes the same functions; the compiler picks one.
 
 use std::path::PathBuf;
+use serde::Serialize;
 
 #[cfg(windows)]
 mod windows;
@@ -23,6 +24,33 @@ pub struct LocalTime {
     pub hour: u32,
     pub minute: u32,
     pub second: u32,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowContext {
+    pub app_name: String,
+    pub title: String,
+    pub window_id: isize,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowCapture {
+    pub app_name: String,
+    pub title: String,
+    pub window_id: isize,
+    pub width: u32,
+    pub height: u32,
+    pub png_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum WindowAction {
+    Click { x: i32, y: i32 },
+    Type { text: String },
+    Hotkey { keys: Vec<String> },
 }
 
 /// The user's home directory, where `.claude/settings.json` lives.

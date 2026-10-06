@@ -2,9 +2,8 @@
 //
 // Windows: the named pipe `\\.\pipe\coucou-<sid>`, one instance per connection.
 // Linux: the Unix socket `$XDG_RUNTIME_DIR/coucou.sock`. Every hook event is
-// forwarded to the island as a `hook` event. `PermissionRequest` is the only one
-// that keeps its connection open: it waits for the island's decision and writes
-// it back on the same connection, which is how approving from the island works.
+// forwarded to the island as a `hook` event. `PermissionRequest` and the
+// `AskUserQuestion` tool call hold their connection open for a user response.
 //
 // Claude Code is never blocked by us. Three things guarantee it:
 //   * coucou-hook gives the connection 300 ms and exits cleanly if we are closed;
@@ -42,7 +41,7 @@ const DECISION_TIMEOUT: Duration = Duration::from_secs(108);
 const ACK_TIMEOUT: Duration = Duration::from_millis(800);
 const MAX_PAYLOAD: usize = 1 << 20;
 
-/// What the island can say about a permission request.
+/// What the island can say about a permission or question request.
 pub enum Reply {
     /// The card is on screen and a human can act on it.
     Ack,
@@ -195,13 +194,18 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
         .unwrap_or_default()
         .to_string();
 
-    if event != "PermissionRequest" {
+    let is_question = event == "PreToolUse"
+        && payload.get("tool_name").and_then(Value::as_str) == Some("AskUserQuestion");
+    if event != "PermissionRequest" && !is_question {
         log::line(format!("hook {event}"));
         let _ = app.emit_to(WINDOW_LABEL, "hook", payload);
         pipe.finish();
         return;
     }
 
+    if is_question {
+        payload["coucou_kind"] = json!("ask_user_question");
+    }
     let id = format!("{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed));
     let (tx, mut rx) = mpsc::channel::<Reply>(4);
     {
@@ -209,7 +213,7 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
         pending.0.lock().unwrap().insert(id.clone(), tx);
     }
     payload["request_id"] = json!(id);
-    log::line(format!("hook PermissionRequest id={id}"));
+    log::line(format!("hook {} id={id}", if is_question { "AskUserQuestion" } else { "PermissionRequest" }));
     let _ = app.emit_to(WINDOW_LABEL, "hook", payload);
 
     let decision = wait_for_decision(&id, &mut rx).await;
@@ -230,7 +234,7 @@ async fn wait_for_decision(id: &str, rx: &mut mpsc::Receiver<Reply>) -> Option<S
         Ok(Some(Reply::Ack)) => {}
         // A click that beats the ack is still a click.
         Ok(Some(Reply::Decision(d))) => {
-            log::line(format!("hook id={id} answered {d}"));
+            log::line(format!("hook id={id} {}", decision_summary(&d)));
             return Some(d);
         }
         Ok(Some(Reply::Decline)) => {
@@ -246,7 +250,7 @@ async fn wait_for_decision(id: &str, rx: &mut mpsc::Receiver<Reply>) -> Option<S
 
     match tokio::time::timeout(DECISION_TIMEOUT, rx.recv()).await {
         Ok(Some(Reply::Decision(d))) => {
-            log::line(format!("hook id={id} answered {d}"));
+            log::line(format!("hook id={id} {}", decision_summary(&d)));
             Some(d)
         }
         Ok(Some(Reply::Decline)) => {
@@ -257,6 +261,18 @@ async fn wait_for_decision(id: &str, rx: &mut mpsc::Receiver<Reply>) -> Option<S
             log::line(format!("hook id={id} timed out — terminal takes over"));
             None
         }
+    }
+}
+
+fn decision_summary(decision: &str) -> &'static str {
+    match decision.trim() {
+        "allow" | "always" => "allowed permission request",
+        "deny" => "denied permission request",
+        _ if serde_json::from_str::<Value>(decision)
+            .ok()
+            .and_then(|value| value.get("coucouDecision").and_then(Value::as_str).map(str::to_owned))
+            .as_deref() == Some("answer") => "answered question",
+        _ => "received decision",
     }
 }
 
@@ -294,4 +310,72 @@ pub fn answer(app: &AppHandle, request_id: &str, decision: &str) {
     };
     log::line(format!("decision id={request_id} {word}"));
     send(app, request_id, Reply::Decision(word.to_string()), false);
+}
+
+/// Sends validated structured answers back through the AskUserQuestion hook.
+pub fn answer_question(app: &AppHandle, request_id: &str, answers: Value) -> Result<(), String> {
+    validate_question_answers(&answers)?;
+    let reply = json!({ "coucouDecision": "answer", "answers": answers }).to_string();
+    if reply.len() > 8192 {
+        return Err("Question answers exceed the safe size limit.".into());
+    }
+    send(app, request_id, Reply::Decision(reply), false);
+    Ok(())
+}
+
+fn validate_question_answers(answers: &Value) -> Result<(), String> {
+    let Some(entries) = answers.as_object() else {
+        return Err("Question answers must be an object.".into());
+    };
+    if entries.is_empty() || entries.len() > 4 {
+        return Err("Provide answers to between one and four questions.".into());
+    }
+    for (question, answer) in entries {
+        if question.trim().is_empty() || question.len() > 1000 {
+            return Err("Question text is empty or too long.".into());
+        }
+        let values: Vec<&str> = match answer {
+            Value::String(value) => vec![value],
+            Value::Array(values) if !values.is_empty() && values.len() <= 4 => values
+                .iter()
+                .map(|value| value.as_str().ok_or_else(|| "Answer choices must be text.".to_string()))
+                .collect::<Result<_, _>>()?,
+            _ => return Err("Each answer must be text or a list of up to four choices.".into()),
+        };
+        if values.iter().any(|value| value.trim().is_empty() || value.len() > 1000) {
+            return Err("Answers must not be empty or exceed 1,000 bytes.".into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decision_summary, validate_question_answers};
+    use serde_json::json;
+
+    #[test]
+    fn question_answers_accept_single_and_multiple_choices() {
+        assert!(validate_question_answers(&json!({
+            "Choose": "Fast",
+            "Features": ["One", "Two"],
+        })).is_ok());
+    }
+
+    #[test]
+    fn question_answers_reject_empty_or_oversized_payloads() {
+        assert!(validate_question_answers(&json!({})).is_err());
+        assert!(validate_question_answers(&json!({"Q": ["", "Valid"]})).is_err());
+        assert!(validate_question_answers(&json!({"Q": "x".repeat(1001)})).is_err());
+    }
+
+    #[test]
+    fn logs_never_include_typed_question_answers() {
+        let answer = json!({
+            "coucouDecision": "answer",
+            "answers": { "Question": "private answer" },
+        }).to_string();
+        assert_eq!(decision_summary(&answer), "answered question");
+        assert_eq!(decision_summary("allow"), "allowed permission request");
+    }
 }

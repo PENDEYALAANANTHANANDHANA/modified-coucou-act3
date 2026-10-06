@@ -6,6 +6,18 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct McpServerConfig {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub sound_enabled: bool,
     pub sound_volume: f64,
@@ -30,6 +42,12 @@ pub struct Settings {
     /// Defaulted explicitly so a settings.json written by an older build still loads.
     #[serde(default = "default_model")]
     pub model: String,
+    #[serde(default = "default_omniroute_model")]
+    pub omniroute_model: String,
+    #[serde(default = "default_openrouter_model")]
+    pub openrouter_model: String,
+    #[serde(default = "default_ollama_model")]
+    pub ollama_model: String,
     #[serde(default = "default_provider")]
     pub provider: String,
     #[serde(default = "default_online_base_url")]
@@ -40,10 +58,24 @@ pub struct Settings {
     pub omniroute_base_url: String,
     #[serde(default = "default_ollama_url")]
     pub ollama_url: String,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 fn default_model() -> String {
     crate::claude::DEFAULT_MODEL.to_string()
+}
+
+fn default_omniroute_model() -> String {
+    crate::claude::DEFAULT_MODEL.to_string()
+}
+
+fn default_openrouter_model() -> String {
+    crate::claude::DEFAULT_MODEL.to_string()
+}
+
+fn default_ollama_model() -> String {
+    "llama3.2".into()
 }
 
 fn default_friend_mode_min_minutes() -> u32 { 30 }
@@ -73,11 +105,15 @@ impl Default for Settings {
             autostart: false,
             hooks_installed: false,
             model: default_model(),
+            omniroute_model: default_omniroute_model(),
+            openrouter_model: default_openrouter_model(),
+            ollama_model: default_ollama_model(),
             provider: default_provider(),
             online_base_url: default_online_base_url(),
             openrouter_base_url: default_openrouter_base_url(),
             omniroute_base_url: default_omniroute_base_url(),
             ollama_url: default_ollama_url(),
+            mcp_servers: Vec::new(),
         }
     }
 }
@@ -95,10 +131,40 @@ fn settings_path() -> PathBuf {
 pub fn load() -> Settings {
     match std::fs::read(settings_path()) {
         Ok(bytes) => {
-            let mut settings: Settings = serde_json::from_slice(&bytes).unwrap_or_default();
+            let value: serde_json::Value =
+                serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            let has_omniroute_model = value
+                .get("omnirouteModel")
+                .is_some_and(serde_json::Value::is_string);
+            let has_openrouter_model = value
+                .get("openrouterModel")
+                .is_some_and(serde_json::Value::is_string);
+            let has_ollama_model = value
+                .get("ollamaModel")
+                .is_some_and(serde_json::Value::is_string);
+            let mut settings: Settings =
+                serde_json::from_value(value).unwrap_or_else(|_| Settings::default());
             normalize_friend_mode(&mut settings);
             if !matches!(settings.provider.as_str(), "online" | "openrouter" | "omniroute" | "ollama") {
                 settings.provider = default_provider();
+            }
+            if !has_omniroute_model && settings.provider == "omniroute" {
+                settings.omniroute_model = settings.model.clone();
+            }
+            if !has_openrouter_model && settings.provider == "openrouter" {
+                settings.openrouter_model = settings.model.clone();
+            }
+            if !has_ollama_model && settings.provider == "ollama" {
+                settings.ollama_model = settings.model.clone();
+            }
+            if settings.omniroute_model.starts_with("claude-") {
+                settings.omniroute_model = default_omniroute_model();
+            }
+            if settings.openrouter_model.starts_with("claude-") {
+                settings.openrouter_model = default_openrouter_model();
+            }
+            if settings.ollama_model.starts_with("claude-") {
+                settings.ollama_model = default_ollama_model();
             }
             if settings.model.starts_with("claude-") {
                 settings.model = if settings.provider == "ollama" {
@@ -149,6 +215,9 @@ mod tests {
         object.remove("friendModeQuietStartHour");
         object.remove("friendModeQuietEndHour");
         object.remove("omnirouteBaseUrl");
+        object.remove("omnirouteModel");
+        object.remove("openrouterModel");
+        object.remove("ollamaModel");
 
         let loaded: Settings = serde_json::from_value(saved).unwrap();
         assert!(!loaded.friend_mode_enabled);
@@ -157,6 +226,9 @@ mod tests {
         assert_eq!(loaded.friend_mode_quiet_start_hour, 22);
         assert_eq!(loaded.friend_mode_quiet_end_hour, 8);
         assert_eq!(loaded.omniroute_base_url, "http://localhost:20128/v1");
+        assert_eq!(loaded.omniroute_model, crate::claude::DEFAULT_MODEL);
+        assert_eq!(loaded.openrouter_model, crate::claude::DEFAULT_MODEL);
+        assert_eq!(loaded.ollama_model, "llama3.2");
     }
 
     #[test]

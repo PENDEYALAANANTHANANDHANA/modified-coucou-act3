@@ -5,12 +5,12 @@
 
 import { Bridge, onEvent } from "../core/bridge";
 import { Sound } from "../core/sound";
-import { State } from "../core/state";
+import { State, type HookQuestionItem } from "../core/state";
 import type { Island } from "./island";
 
 const CLAUDE_ID = "integration_claude";
 
-/** Clears the approval card if no decision was made before the hook gave up. */
+/** Clears an interactive request before its hook relay times out. */
 let pendingTimeout: number | null = null;
 
 interface HookPayload {
@@ -23,6 +23,8 @@ interface HookPayload {
   prompt?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
+  tool_response?: Record<string, unknown>;
+  coucou_kind?: string;
   /** Optional agent tag: lowercase, digits and hyphens, ≤ 24 chars. */
   coucou_agent?: string;
 }
@@ -92,6 +94,30 @@ function stepLabel(tool: string, input: Record<string, unknown>): string {
   return label;
 }
 
+function liveFileEdits(tool: string, input: Record<string, unknown>): Array<{
+  path: string;
+  oldText: string;
+  newText: string;
+}> {
+  const path = typeof input.file_path === "string" ? input.file_path : "";
+  if (!path) return [];
+  if (tool === "Edit" && typeof input.old_string === "string" && typeof input.new_string === "string") {
+    return [{ path, oldText: input.old_string, newText: input.new_string }];
+  }
+  if (tool === "Write" && typeof input.content === "string") {
+    return [{ path, oldText: "", newText: input.content }];
+  }
+  if (tool === "MultiEdit" && Array.isArray(input.edits)) {
+    return input.edits.flatMap((raw) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+      const edit = raw as Record<string, unknown>;
+      if (typeof edit.old_string !== "string" || typeof edit.new_string !== "string") return [];
+      return [{ path, oldText: edit.old_string, newText: edit.new_string }];
+    }).slice(0, 10);
+  }
+  return [];
+}
+
 /**
  * What the Allow button actually authorises. Approving "Write" tells you nothing
  * — approving `Write · C:\…\.env` tells you everything, and the difference is
@@ -118,6 +144,36 @@ function approvalTarget(tool: string, input: Record<string, unknown>): string {
     }
   }
   return tool;
+}
+
+function parseQuestionItems(toolInput: Record<string, unknown> | undefined): HookQuestionItem[] | null {
+  const rawQuestions = toolInput?.questions;
+  if (!Array.isArray(rawQuestions) || rawQuestions.length < 1 || rawQuestions.length > 4) return null;
+  const questions: HookQuestionItem[] = [];
+  for (const raw of rawQuestions) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const question = raw as Record<string, unknown>;
+    if (typeof question.question !== "string" || !question.question.trim() || question.question.length > 2000) return null;
+    if (!Array.isArray(question.options) || question.options.length < 2 || question.options.length > 4) return null;
+    const options = [];
+    for (const rawOption of question.options) {
+      if (!rawOption || typeof rawOption !== "object" || Array.isArray(rawOption)) return null;
+      const option = rawOption as Record<string, unknown>;
+      if (typeof option.label !== "string" || !option.label.trim() || option.label.length > 250) return null;
+      if (option.description !== undefined && (typeof option.description !== "string" || option.description.length > 1000)) return null;
+      options.push({
+        label: option.label,
+        description: typeof option.description === "string" ? option.description : "",
+      });
+    }
+    questions.push({
+      question: question.question,
+      header: typeof question.header === "string" ? question.header.slice(0, 12) : "",
+      options,
+      multiSelect: question.multiSelect === true,
+    });
+  }
+  return questions;
 }
 
 function upsert(projectName: string, cwd: string) {
@@ -185,6 +241,7 @@ function handleHook(island: Island, payload: HookPayload) {
   switch (name) {
     case "SessionStart":
       ensurePill();
+      State.clearCodeSession(agentId);
       surface("overview", false);
       Sound.play("work");
       break;
@@ -195,25 +252,74 @@ function handleHook(island: Island, payload: HookPayload) {
       // The field is `prompt`; reading `message` meant this step was always blank.
       const asked = payload.prompt ?? payload.message;
       if (asked) State.appendStep(agentId, asked.slice(0, 60));
+      State.startCodeActivity(agentId, projectName, "Prompt", asked?.slice(0, 100) ?? "New coding request");
       surface("overview", false);
       break;
     }
 
     case "PreToolUse": {
+      if (payload.coucou_kind === "ask_user_question") {
+        const requestId = payload.request_id ?? "";
+        const questions = parseQuestionItems(payload.tool_input);
+        if (isExternalAgent || !requestId || !questions) {
+          if (requestId) void Bridge.approvalDecline(requestId);
+          break;
+        }
+        const existing = State.pendingApproval ?? State.pendingQuestion;
+        if (existing && existing.requestId !== requestId) {
+          void Bridge.approvalDecline(requestId);
+          break;
+        }
+        upsert(projectName, cwd);
+        if (pendingTimeout != null) window.clearTimeout(pendingTimeout);
+        State.pendingQuestion = {
+          requestId,
+          sessionId: payload.session_id ?? "",
+          questions,
+        };
+        if (requestId) void Bridge.approvalAck(requestId);
+        State.updateTask(CLAUDE_ID, "question");
+        State.isPinned = true;
+        State.setPillBadge(CLAUDE_ID, null);
+        Sound.play("question");
+        island.alert("tools");
+        pendingTimeout = window.setTimeout(() => {
+          pendingTimeout = null;
+          if (State.pendingQuestion?.requestId !== requestId) return;
+          State.pendingQuestion = null;
+          State.isPinned = false;
+          island.dropPin();
+          State.updateTask(CLAUDE_ID, "working");
+          State.setPillBadge(CLAUDE_ID, null);
+          if (State.view === "question") island.setView(State.defaultView());
+          State.notify();
+        }, 106_000);
+        break;
+      }
       ensurePill();
       State.updateTask(agentId, "working");
       const tool = payload.tool_name ?? "Tool";
-      State.appendStep(agentId, stepLabel(tool, payload.tool_input ?? {}));
+      const input = payload.tool_input ?? {};
+      State.appendStep(agentId, stepLabel(tool, input));
+      State.startCodeActivity(agentId, projectName, tool, stepLabel(tool, input));
       surface("overview", false);
       break;
     }
 
-    case "PostToolUse":
+    case "PostToolUse": {
       State.updateTask(agentId, "working");
+      const tool = payload.tool_name ?? "Tool";
+      State.finishCodeActivity(agentId, tool);
+      for (const edit of liveFileEdits(tool, payload.tool_input ?? {})) {
+        if (edit.oldText.length + edit.newText.length > 24_000) continue;
+        State.addLiveCodeChange(agentId, projectName, edit.path, edit.oldText, edit.newText);
+      }
       break;
+    }
 
     case "PostToolUseFailure":
       State.updateTask(agentId, "working");
+      State.finishCodeActivity(agentId, payload.tool_name ?? "Tool", true);
       State.appendStep(agentId, "⚠ failed");
       break;
 
@@ -233,6 +339,9 @@ function handleHook(island: Island, payload: HookPayload) {
     case "Stop":
       State.updateTask(agentId, "finished");
       if (payload.message) State.appendStep(agentId, payload.message.slice(0, 60));
+      State.finishCodeActivities(agentId);
+      State.startCodeActivity(agentId, projectName, "Done", payload.message?.slice(0, 120) ?? "Coding session finished");
+      State.finishCodeActivity(agentId, "Done");
       Sound.play("finish");
       if (focused) surface("finished", true);
       else State.setPillBadge(agentId, "finished");
@@ -248,12 +357,14 @@ function handleHook(island: Island, payload: HookPayload) {
 
     case "StopFailure":
       State.updateTask(agentId, "error");
+      State.finishCodeActivities(agentId, true);
       Sound.play("error");
       if (focused) surface("error", true);
       else State.setPillBadge(agentId, "error");
       break;
 
     case "SessionEnd":
+      State.finishCodeActivities(agentId);
       if (isExternalAgent) {
         State.removeTask(agentId);
       } else {
@@ -283,7 +394,8 @@ function handleHook(island: Island, payload: HookPayload) {
       // One card, one request. A second one must never quietly replace the first
       // — that would leave a human staring at request B while request A waits for
       // a decision nobody can give. Hand it straight back to the terminal.
-      if (State.pendingApproval && State.pendingApproval.requestId !== requestId) {
+      const existing = State.pendingApproval ?? State.pendingQuestion;
+      if (existing && existing.requestId !== requestId) {
         if (requestId) void Bridge.approvalDecline(requestId);
         break;
       }
@@ -303,20 +415,13 @@ function handleHook(island: Island, payload: HookPayload) {
       State.updateTask(CLAUDE_ID, "approval");
       State.isPinned = true;
       Sound.play("approval");
-      if (focused) {
-        island.alert("approval");
-      } else {
-        // Another agent holds the view, so the card would yank it away. The badge
-        // is the signal instead — but it has to be on screen for that to mean
-        // anything, hence the reveal. We just told the relay a human can act.
-        State.setPillBadge(CLAUDE_ID, "approval");
-        island.reveal();
-      }
+      State.setPillBadge(CLAUDE_ID, "approval");
+      island.alert("tools");
       // Coucou answers within 108 s or not at all; after that the terminal has
       // taken over and the card would be lying.
       pendingTimeout = window.setTimeout(() => {
         pendingTimeout = null;
-        if (!State.pendingApproval) return;
+        if (State.pendingApproval?.requestId !== requestId) return;
         State.pendingApproval = null;
         State.isPinned = false;
         island.dropPin();
@@ -324,7 +429,7 @@ function handleHook(island: Island, payload: HookPayload) {
         State.setPillBadge(CLAUDE_ID, null);
         if (State.view === "approval") island.setView(State.defaultView());
         State.notify();
-      }, 110_000);
+      }, 106_000);
       break;
     }
 

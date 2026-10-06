@@ -28,11 +28,86 @@ export interface ApprovalInfo {
   command: string;
 }
 
+export interface HookQuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface HookQuestionItem {
+  question: string;
+  header: string;
+  options: HookQuestionOption[];
+  multiSelect: boolean;
+}
+
+export interface PendingQuestion {
+  requestId: string;
+  sessionId: string;
+  questions: HookQuestionItem[];
+}
+
+export interface PendingMcpApproval {
+  requestId: string;
+  serverId: string;
+  serverName: string;
+  toolName: string;
+  description: string;
+  arguments: unknown;
+}
+
+export interface CodeActivityEntry {
+  id: number;
+  agentId: string;
+  agentName: string;
+  tool: string;
+  detail: string;
+  status: "running" | "done" | "failed";
+  at: number;
+}
+
+export interface LiveCodeChange {
+  id: number;
+  agentId: string;
+  agentName: string;
+  path: string;
+  oldText: string;
+  newText: string;
+  at: number;
+}
+
 export interface ChatMessage {
   id: number;
   role: "user" | "assistant";
   content: string;
 }
+
+export type ChatAgentId = "omniroute" | "openrouter" | "ollama";
+
+export const CHAT_AGENTS: Record<ChatAgentId, {
+  name: string;
+  purpose: string;
+  color: string;
+  modelSetting: "omnirouteModel" | "openrouterModel" | "ollamaModel";
+}> = {
+  omniroute: {
+    name: "OmniRoute",
+    purpose: "Online model router",
+    color: "#a855f7",
+    modelSetting: "omnirouteModel",
+  },
+  openrouter: {
+    name: "OpenRouter",
+    purpose: "Cloud model catalog",
+    color: "#38bdf8",
+    modelSetting: "openrouterModel",
+  },
+  ollama: {
+    name: "Ollama",
+    purpose: "Local model chat",
+    color: "#a3e635",
+    modelSetting: "ollamaModel",
+  },
+};
 
 export type PromptContext =
   | { kind: "window"; appName: string; title: string; url?: string }
@@ -95,11 +170,23 @@ export interface Settings {
   hooksInstalled: boolean;
   /** Selected model used by the active provider. */
   model: string;
+  omnirouteModel: string;
+  openrouterModel: string;
+  ollamaModel: string;
   provider: "online" | "openrouter" | "omniroute" | "ollama";
   onlineBaseUrl: string;
   openrouterBaseUrl: string;
   omnirouteBaseUrl: string;
   ollamaUrl: string;
+  mcpServers: McpServerConfig[];
+}
+
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  enabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -119,11 +206,15 @@ export const DEFAULT_SETTINGS: Settings = {
   autostart: false,
   hooksInstalled: false,
   model: "openrouter/auto",
+  omnirouteModel: "openrouter/auto",
+  openrouterModel: "openrouter/auto",
+  ollamaModel: "llama3.2",
   provider: "openrouter",
   onlineBaseUrl: "https://api.openai.com/v1",
   openrouterBaseUrl: "https://openrouter.ai/api/v1",
   omnirouteBaseUrl: "http://localhost:20128/v1",
   ollamaUrl: "http://127.0.0.1:11434",
+  mcpServers: [],
 };
 
 type Listener = () => void;
@@ -150,13 +241,38 @@ class AppState {
   fileDragOver = false;
 
   promptContext: PromptContext | null = null;
+  projectRootContext: string | null = null;
+  previousWindowContext: { appName: string; title: string; windowId: number } | null = null;
+  attachedWindowContext: { appName: string; title: string; windowId: number } | null = null;
+  attachedWindowCapture: import("./bridge").WindowCapture | null = null;
   droppedFile: { name: string; path: string } | null = null;
+  droppedFiles: { name: string; path: string }[] = [];
   activeDocument: { name: string; path: string } | null = null;
   noteMessage: string | null = null;
   searchResult: SearchResult | null = null;
-  chatHistory: ChatMessage[] = [];
+  chatAgent: ChatAgentId = "openrouter";
+  readonly chatHistories: Record<ChatAgentId, ChatMessage[]> = {
+    omniroute: [],
+    openrouter: [],
+    ollama: [],
+  };
   promptPrefill = "";
   pendingApproval: ApprovalInfo | null = null;
+  pendingQuestion: PendingQuestion | null = null;
+  readonly pendingMcpApprovals: PendingMcpApproval[] = [];
+  readonly codeActivity: CodeActivityEntry[] = [];
+  readonly liveCodeChanges: LiveCodeChange[] = [];
+  private nextCodeActivityId = 1;
+  private nextLiveCodeChangeId = 1;
+  pendingDesktopAction: {
+    windowId: number;
+    appName: string;
+    title: string;
+    width: number;
+    height: number;
+    summary: string;
+    action: import("./bridge").WindowAction;
+  } | null = null;
 
   integrations: Record<string, IntegrationInfo> = {};
 
@@ -165,6 +281,20 @@ class AppState {
   settings: Settings = { ...DEFAULT_SETTINGS };
 
   private listeners = new Set<Listener>();
+
+  get chatHistory(): ChatMessage[] {
+    return this.chatHistories[this.chatAgent];
+  }
+
+  set chatHistory(messages: ChatMessage[]) {
+    this.chatHistories[this.chatAgent] = messages;
+  }
+
+  setChatAgent(agent: ChatAgentId) {
+    if (this.chatAgent === agent) return;
+    this.chatAgent = agent;
+    this.notify();
+  }
 
   subscribe(fn: Listener): () => void {
     this.listeners.add(fn);
@@ -216,6 +346,67 @@ class AppState {
     const t = this.tasks.find((x) => x.id === id);
     if (!t) return;
     t.pillBadge = badge;
+    this.notify();
+  }
+
+  startCodeActivity(agentId: string, agentName: string, tool: string, detail: string) {
+    const entry: CodeActivityEntry = {
+      id: this.nextCodeActivityId++,
+      agentId,
+      agentName,
+      tool,
+      detail,
+      status: "running",
+      at: Date.now(),
+    };
+    this.codeActivity.push(entry);
+    if (this.codeActivity.length > 40) this.codeActivity.splice(0, this.codeActivity.length - 40);
+    this.notify();
+  }
+
+  finishCodeActivity(agentId: string, tool: string, failed = false, detail?: string) {
+    const entry = [...this.codeActivity].reverse().find(
+      (item) => item.agentId === agentId && item.tool === tool && item.status === "running",
+    );
+    if (!entry) return;
+    entry.status = failed ? "failed" : "done";
+    if (detail) entry.detail = detail;
+    this.notify();
+  }
+
+  finishCodeActivities(agentId: string, failed = false) {
+    let changed = false;
+    for (const entry of this.codeActivity) {
+      if (entry.agentId === agentId && entry.status === "running") {
+        entry.status = failed ? "failed" : "done";
+        changed = true;
+      }
+    }
+    if (changed) this.notify();
+  }
+
+  clearCodeSession(agentId: string) {
+    const previousActivityCount = this.codeActivity.length;
+    const previousChangeCount = this.liveCodeChanges.length;
+    this.codeActivity.splice(0, this.codeActivity.length, ...this.codeActivity.filter((entry) => entry.agentId !== agentId));
+    this.liveCodeChanges.splice(0, this.liveCodeChanges.length, ...this.liveCodeChanges.filter((change) => change.agentId !== agentId));
+    if (previousActivityCount !== this.codeActivity.length || previousChangeCount !== this.liveCodeChanges.length) {
+      this.notify();
+    }
+  }
+
+  addLiveCodeChange(agentId: string, agentName: string, path: string, oldText: string, newText: string) {
+    const change: LiveCodeChange = {
+      id: this.nextLiveCodeChangeId++,
+      agentId,
+      agentName,
+      path,
+      oldText,
+      newText,
+      at: Date.now(),
+    };
+    this.liveCodeChanges.push(change);
+    if (this.liveCodeChanges.length > 20) this.liveCodeChanges.splice(0, this.liveCodeChanges.length - 20);
     this.notify();
   }
 

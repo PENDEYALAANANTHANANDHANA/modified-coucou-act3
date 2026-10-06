@@ -5,7 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import type { Settings } from "./state";
+import type { ChatAgentId, Settings } from "./state";
 
 export const IS_TAURI =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -46,7 +46,27 @@ export const Bridge = {
     call<void>("set_island_rect", { x, y, width, height }),
 
   /** Give the window keyboard focus (chat field) and take it away again. */
-  focusWindow: (focused: boolean) => call<void>("focus_window", { focused }),
+  focusWindow: (focused: boolean) =>
+    call<{ appName: string; title: string; windowId: number } | null>("focus_window", { focused }),
+  captureWindow: (windowId: number) =>
+    callOrThrow<WindowCapture>("capture_window", { windowId }),
+  performWindowAction: (
+    windowId: number,
+    expectedAppName: string,
+    expectedTitle: string,
+    expectedWidth: number,
+    expectedHeight: number,
+    action: WindowAction,
+    approved: boolean,
+  ) => callOrThrow<void>("perform_window_action", {
+    windowId,
+    expectedAppName,
+    expectedTitle,
+    expectedWidth,
+    expectedHeight,
+    action,
+    approved,
+  }),
 
   reposition: () => call<void>("reposition"),
 
@@ -78,6 +98,10 @@ export const Bridge = {
 
   approvalDecision: (requestId: string, decision: "allow" | "deny") =>
     call<void>("approval_decision", { requestId, decision }),
+  answerQuestion: (requestId: string, answers: Record<string, string | string[]>) =>
+    callOrThrow<void>("question_answer", { requestId, answers }),
+  releaseQuestion: (requestId: string) =>
+    callOrThrow<void>("approval_decline", { requestId }),
   /** "The card is up" — until this lands the relay only waits a moment. */
   approvalAck: (requestId: string) => call<void>("approval_ack", { requestId }),
   /** "Nobody can act on this" — Claude Code asks in the terminal right away. */
@@ -85,12 +109,29 @@ export const Bridge = {
 
   // ── Chat, files, secrets ──────────────────────────────────────────────────
   /** One chat turn. The API key and any file bytes never leave Rust. */
-  chatSend: (query: string, context: ChatContext | null) =>
-    callOrThrow<ChatReply>("chat_send", { query, context }),
+  chatSend: (query: string, context: ChatContext | null, agent: ChatAgentId) =>
+    callOrThrow<ChatReply>("chat_send", { query, context, agent }),
   runCustomTask: (instructions: string) =>
     callOrThrow<{ text: string }>("run_custom_task", { instructions }),
-  generateCodeChanges: (root: string, instructions: string) =>
-    callOrThrow<CodeProposal>("generate_code_changes", { root, instructions }),
+  generateCodeChanges: async (
+    root: string,
+    instructions: string,
+    requestId: string,
+    onProgress: (progress: CodeGenerationProgress) => void,
+  ) => {
+    const unlisten = await onEvent<CodeGenerationProgress>("act3:code-generation-progress", (progress) => {
+      if (progress.requestId === requestId) onProgress(progress);
+    });
+    try {
+      return await callOrThrow<CodeProposal>("generate_code_changes", { root, instructions, requestId });
+    } finally {
+      unlisten();
+    }
+  },
+  summarizeProject: (root: string) =>
+    callOrThrow<string>("summarize_project", { root }),
+  openProjectInEditor: (path: string, editor: "vscode" | "cursor" | "system") =>
+    callOrThrow<void>("open_project_in_editor", { path, editor }),
   applyCodeChanges: (root: string, changes: CodeChange[]) =>
     callOrThrow<string[]>("apply_code_changes", { root, changes }),
   searchFiles: (root: string, query: string) =>
@@ -110,10 +151,32 @@ export const Bridge = {
   systemIdleSeconds: () => callOrThrow<number>("system_idle_seconds"),
   /** Copies a dropped file into the inbox. */
   ingestFile: (path: string) => callOrThrow<DroppedFile>("ingest_file", { path }),
+  /** Copies a batch of dropped files into the inbox. */
+  ingestFiles: (paths: string[]) => callOrThrow<DroppedFile[]>("ingest_files", { paths }),
   /** Only ever tells you whether a key exists — never its value. */
   secretPresent: (key: string) => call<boolean>("secret_present", { key }),
   secretSet: (key: string, value: string) => callOrThrow<void>("secret_set", { key, value }),
   secretClear: (key: string) => callOrThrow<void>("secret_clear", { key }),
+  mcpListTools: (serverId: string) =>
+    callOrThrow<McpTool[]>("mcp_list_tools", { serverId }),
+  mcpCallTool: (serverId: string, toolName: string, arguments_: unknown, approved: boolean) =>
+    callOrThrow<string>("mcp_call_tool", {
+      serverId,
+      toolName,
+      arguments: arguments_,
+      approved,
+    }),
+  mcpApprovalDecision: (requestId: string, allow: boolean) =>
+    callOrThrow<void>("mcp_approval_decision", { requestId, allow }),
+  proposeWindowAction: (
+    instruction: string,
+    capture: WindowCapture,
+    agent: ChatAgentId,
+  ) => callOrThrow<WindowActionProposal>("propose_window_action", {
+    instruction,
+    capture,
+    agent,
+  }),
 
   // ── Integrations ──────────────────────────────────────────────────────────
   refreshIntegration: (id: string) => call<void>("refresh_integration", { id }),
@@ -130,7 +193,9 @@ export interface IntegrationUpdate {
 
 export type ChatContext =
   | { kind: "file"; name: string; path: string; writePath?: string }
-  | { kind: "window"; appName: string; title: string; url?: string };
+  | { kind: "files"; files: Array<Pick<DroppedFile, "name" | "path">> }
+  | { kind: "project"; root: string }
+  | { kind: "window"; appName: string; title: string; url?: string; screenshotBase64?: string };
 
 export interface DroppedFile {
   name: string;
@@ -163,6 +228,40 @@ export interface CodeChange {
 export interface CodeProposal {
   summary: string;
   changes: CodeChange[];
+}
+
+export interface CodeGenerationProgress {
+  requestId: string;
+  stage: "scan" | "context" | "generate" | "validate" | "ready" | "failed";
+  detail: string;
+}
+
+export interface McpTool {
+  serverId: string;
+  serverName: string;
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface WindowCapture {
+  appName: string;
+  title: string;
+  windowId: number;
+  width: number;
+  height: number;
+  pngBase64: string;
+}
+
+export type WindowAction =
+  | { kind: "click"; x: number; y: number }
+  | { kind: "type"; text: string }
+  | { kind: "hotkey"; keys: string[] };
+
+export interface WindowActionProposal {
+  summary: string;
+  action: WindowAction | null;
+  capture: WindowCapture;
 }
 
 export interface HookStatus {
