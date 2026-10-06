@@ -1668,6 +1668,35 @@ input[type="range"]::-webkit-slider-thumb {
 .alarm { padding: 4px 6px; border: 1px solid #ffffff16; border-radius: 6px; color: #b7bdc7; background: #ffffff08; font-size: 9px; }
 .file-tools { border-top: 1px solid #ffffff12; padding-top: 8px; }
 .code-agent { border-top: 1px solid #ffffff12; padding-top: 8px; }
+.ask-inline-panel .code-agent {
+  gap: 8px;
+  padding: 13px;
+  border-color: rgba(167,139,250,.17);
+  background:
+    radial-gradient(ellipse at 100% 0, rgba(167,139,250,.08), transparent 54%),
+    rgba(255,255,255,.025);
+}
+.code-agent > .tool-title { font-size: 12px; }
+.code-agent > .tool-muted { line-height: 1.4; }
+.project-path-row { gap: 6px; }
+.project-path-row .tool-input { min-height: 32px; }
+.code-agent .code-prompt { min-height: 68px; padding: 9px 10px; line-height: 1.45; }
+.code-agent-actions { justify-content: flex-end; }
+.code-agent-actions .primary { min-height: 31px; padding-inline: 13px; }
+.code-project-options {
+  border-top: 1px solid #ffffff10;
+  padding-top: 7px;
+}
+.code-project-options > summary {
+  width: fit-content;
+  color: #a9a5b5;
+  font: 550 9px var(--font);
+  cursor: pointer;
+  transition: color .15s ease;
+}
+.code-project-options > summary:hover { color: #e1d9ff; }
+.code-project-options[open] { display: grid; gap: 7px; }
+.code-project-options .project-actions { flex-wrap: wrap; }
 .code-prompt { min-height: 52px; }
 .code-agent-actions { align-items: flex-start; }
 .code-agent-actions .tool-muted { flex: 1; line-height: 1.35; }
@@ -1687,6 +1716,46 @@ input[type="range"]::-webkit-slider-thumb {
   animation: code-progress-surface 2.4s ease-in-out infinite, hook-request-enter 0.28s ease-out both;
 }
 .code-progress[hidden] { display: none; }
+.code-progress.is-complete {
+  background: rgba(255,255,255,.025);
+  background-size: auto;
+  animation: hook-request-enter .22s ease-out both;
+}
+.code-progress.is-complete .code-progress-orb { border: 0; background: #34d399; animation: none; }
+.code-progress.is-complete .code-progress-track { display: none; }
+.code-live-feed {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 2px;
+  max-height: 112px;
+  overflow: auto;
+  padding: 2px 1px 0;
+}
+.code-live-feed:empty { display: none; }
+.code-live-feed-item {
+  display: grid;
+  grid-template-columns: 12px 76px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 5px;
+  border-radius: 5px;
+  color: #abb4c2;
+  font: 8px/1.4 var(--font);
+  animation: code-feed-enter .2s ease-out both;
+}
+.code-live-feed-item:not(:last-child) { opacity: .7; }
+.code-live-feed-item.generate { color: #e0d6ff; background: rgba(167,139,250,.07); }
+.code-live-feed-item.ready { color: #a7f3c0; background: rgba(34,197,94,.07); }
+.code-live-feed-item.failed { color: #fda4af; background: rgba(244,63,94,.07); }
+.code-live-feed-icon { color: #a78bfa; font: 700 10px ui-monospace, monospace; }
+.code-live-feed-item.ready .code-live-feed-icon { color: #4ade80; }
+.code-live-feed-item.failed .code-live-feed-icon { color: #fb7185; }
+.code-live-feed-label { color: inherit; font-weight: 650; }
+.code-live-feed-detail { min-width: 0; overflow-wrap: anywhere; }
+@keyframes code-feed-enter {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .code-progress-orb {
   width: 8px;
   height: 8px;
@@ -1824,7 +1893,7 @@ input[type="range"]::-webkit-slider-thumb {
 .live-code-filter:hover { color: #d7e7fb; background: #ffffff0a; }
 .live-code-filter[aria-pressed="true"] { color: #dff5ff; background: rgba(56,189,248,.16); box-shadow: inset 0 0 0 1px rgba(56,189,248,.16); }
 .live-code-filter:focus-visible { outline: 2px solid #7dd3fc; outline-offset: 2px; }
-.live-code-stages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
+.live-code-stages { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
 .live-code-stage {
   display: flex;
   align-items: center;
@@ -1929,6 +1998,7 @@ input[type="range"]::-webkit-slider-thumb {
   .typing i,
   .chat-bar.is-sending,
   .code-progress,
+  .code-live-feed-item,
   .code-progress-orb,
   .code-progress-track i,
   .code-review-icon,

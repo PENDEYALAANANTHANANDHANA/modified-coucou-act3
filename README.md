@@ -84,10 +84,10 @@ reviewed, applying is refused and you can generate a fresh proposal. Use
 `code` command must be available on PATH. Online providers receive the selected
 source context; use Ollama for local-only model inference.
 
-The **Ask → Code** tab also shows live Claude Code Read/Edit/Bash/Done activity
-when the Claude Code integration is installed. Completed Edit, Write, and
-MultiEdit hook events display a bounded, color-coded inline diff preview. These
-are edits already performed by Claude Code; ACT 3 shows them for visibility.
+The **Ask → Code** tab focuses on ACT 3's own project workflow: live generation
+milestones, a reviewable proposal, and bounded diffs. Additional project
+utilities are tucked under **Project tools**. Nothing is written until you
+explicitly approve the proposal.
 
 Use **Summarize project** for an AI-generated overview, or **Ask about project**
 to attach the bounded source snapshot to an Ask conversation. In Ask, **Attach

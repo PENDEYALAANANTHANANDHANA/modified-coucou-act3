@@ -385,9 +385,11 @@ async fn run_custom_task(
 
 #[tauri::command]
 async fn generate_code_changes(
+    app: AppHandle,
     shared: State<'_, Shared>,
     root: String,
     instructions: String,
+    request_id: String,
 ) -> Result<safe_tools::CodeProposal, String> {
     if instructions.trim().is_empty() {
         return Err("Describe the code change you want.".into());
@@ -396,7 +398,42 @@ async fn generate_code_changes(
         return Err("Code instructions must be 4,000 bytes or fewer.".into());
     }
     let settings = shared.settings.lock().unwrap().clone();
-    claude::generate_code_changes(&settings, root, instructions).await
+    let progress_app = app.clone();
+    let progress_request_id = request_id.clone();
+    let progress = move |stage: &str, detail: &str| {
+        progress_app
+            .emit(
+                "act3:code-generation-progress",
+                CodeGenerationProgress {
+                    request_id: progress_request_id.clone(),
+                    stage: stage.to_string(),
+                    detail: detail.to_string(),
+                },
+            )
+            .map_err(|error| format!("Could not update code-generation progress: {error}"))
+    };
+    match claude::generate_code_changes_with_progress(&settings, root, instructions, progress).await {
+        Ok(proposal) => Ok(proposal),
+        Err(error) => {
+            let _ = app.emit(
+                "act3:code-generation-progress",
+                CodeGenerationProgress {
+                    request_id,
+                    stage: "failed".into(),
+                    detail: error.clone(),
+                },
+            );
+            Err(error)
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CodeGenerationProgress {
+    request_id: String,
+    stage: String,
+    detail: String,
 }
 
 #[tauri::command]

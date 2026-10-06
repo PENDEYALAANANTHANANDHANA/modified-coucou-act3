@@ -364,12 +364,13 @@ class AppState {
     this.notify();
   }
 
-  finishCodeActivity(agentId: string, tool: string, failed = false) {
+  finishCodeActivity(agentId: string, tool: string, failed = false, detail?: string) {
     const entry = [...this.codeActivity].reverse().find(
       (item) => item.agentId === agentId && item.tool === tool && item.status === "running",
     );
     if (!entry) return;
     entry.status = failed ? "failed" : "done";
+    if (detail) entry.detail = detail;
     this.notify();
   }
 

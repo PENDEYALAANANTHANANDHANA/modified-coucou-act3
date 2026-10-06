@@ -491,8 +491,16 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
 
     try {
       await Promise.all(targets.map(async (agent) => {
+        const activityId = `chat:${agent}`;
+        State.startCodeActivity(activityId, CHAT_AGENTS[agent].name, "Chat", "Request sent to selected provider");
         try {
           const reply: ChatReply = await Bridge.chatSend(query, context, agent);
+          State.finishCodeActivity(
+            activityId,
+            "Chat",
+            false,
+            `Response received · ${reply.text.length.toLocaleString()} characters`,
+          );
           State.chatHistories[agent].push({
             id: nextId++,
             role: "assistant",
@@ -506,6 +514,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
             role: "assistant",
             content: `Could not reach ${CHAT_AGENTS[agent].name}: ${String(err).replace(/^Error:\s*/, "")}`,
           });
+          State.finishCodeActivity(activityId, "Chat", true, "Provider request failed");
         } finally {
           replyingAgents.delete(agent);
           State.notify();

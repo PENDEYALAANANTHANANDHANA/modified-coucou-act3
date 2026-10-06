@@ -113,8 +113,21 @@ export const Bridge = {
     callOrThrow<ChatReply>("chat_send", { query, context, agent }),
   runCustomTask: (instructions: string) =>
     callOrThrow<{ text: string }>("run_custom_task", { instructions }),
-  generateCodeChanges: (root: string, instructions: string) =>
-    callOrThrow<CodeProposal>("generate_code_changes", { root, instructions }),
+  generateCodeChanges: async (
+    root: string,
+    instructions: string,
+    requestId: string,
+    onProgress: (progress: CodeGenerationProgress) => void,
+  ) => {
+    const unlisten = await onEvent<CodeGenerationProgress>("act3:code-generation-progress", (progress) => {
+      if (progress.requestId === requestId) onProgress(progress);
+    });
+    try {
+      return await callOrThrow<CodeProposal>("generate_code_changes", { root, instructions, requestId });
+    } finally {
+      unlisten();
+    }
+  },
   summarizeProject: (root: string) =>
     callOrThrow<string>("summarize_project", { root }),
   openProjectInEditor: (path: string, editor: "vscode" | "cursor" | "system") =>
@@ -215,6 +228,12 @@ export interface CodeChange {
 export interface CodeProposal {
   summary: string;
   changes: CodeChange[];
+}
+
+export interface CodeGenerationProgress {
+  requestId: string;
+  stage: "scan" | "context" | "generate" | "validate" | "ready" | "failed";
+  detail: string;
 }
 
 export interface McpTool {

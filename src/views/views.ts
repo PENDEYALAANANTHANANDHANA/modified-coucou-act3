@@ -1021,11 +1021,11 @@ function buildTools(actions: ViewActions, askView: ViewHost): ViewHost {
   }) as HTMLTextAreaElement;
   const projectStatus = h("div", {
     class: "tool-muted",
-    text: "Enter a project folder path. ACT 3 sends up to 40 source files (200 KB) to your selected model.",
+    text: "Choose a project and describe the change. ACT 3 will show a proposal before anything is written.",
   });
   const liveActivityStatus = h("div", {
     class: "tool-muted",
-    text: "Waiting for a Claude Code session. Read, edit, and command activity will appear here.",
+    text: "Waiting for Claude Code hooks or a provider chat request.",
   });
   const liveActivityStages = h("div", { class: "live-code-stages" });
   const liveActivityTimeline = h("div", { class: "live-code-timeline" });
@@ -1058,8 +1058,8 @@ function buildTools(actions: ViewActions, askView: ViewHost): ViewHost {
     h("div", { class: "live-code-heading" },
       h("span", { class: "live-code-pulse", "aria-hidden": "true" }),
       h("div", {},
-        h("div", { class: "tool-title", text: "Live Claude Code session" }),
-        h("div", { class: "tool-muted", text: "Observe tool activity and inspect file edits as they happen." }),
+        h("div", { class: "tool-title", text: "Live agent activity" }),
+        h("div", { class: "tool-muted", text: "Track Claude Code tools and ACT 3 provider requests; file diffs appear when Claude Code edits." }),
       ),
       h("span", { class: "live-code-state", text: "IDLE" }),
     ),
@@ -1079,7 +1079,7 @@ function buildTools(actions: ViewActions, askView: ViewHost): ViewHost {
     clear(liveActivityTimeline);
     clear(liveDiffList);
     if (entries.length === 0) {
-      liveActivityStatus.textContent = "Waiting for a Claude Code session. Read, edit, and command activity will appear here.";
+      liveActivityStatus.textContent = "Waiting for Claude Code hooks or a provider chat request.";
       liveActivityPanel.classList.remove("is-active");
       liveActivityPanel.querySelector(".live-code-state")!.textContent = "IDLE";
       activitySummary.textContent = "No activity yet";
@@ -1095,6 +1095,7 @@ function buildTools(actions: ViewActions, askView: ViewHost): ViewHost {
       Read: ["Read", "Glob", "Grep", "LS"],
       Edit: ["Edit", "Write", "MultiEdit", "NotebookEdit"],
       Bash: ["Bash", "PowerShell"],
+      Chat: ["Chat"],
       Done: ["Done"],
     };
     for (const [stage, tools] of Object.entries(stageTools)) {
@@ -1149,6 +1150,7 @@ function buildTools(actions: ViewActions, askView: ViewHost): ViewHost {
       ));
     });
   };
+  const projectFeed = h("div", { class: "code-live-feed", role: "log", "aria-live": "polite", "aria-label": "Live code generation progress" });
   const projectProgress = h("div", {
     class: "code-progress",
     role: "status",
@@ -1156,9 +1158,30 @@ function buildTools(actions: ViewActions, askView: ViewHost): ViewHost {
     hidden: true,
   },
     h("span", { class: "code-progress-orb", "aria-hidden": "true" }),
-    h("span", { class: "code-progress-label", text: "Preparing project context and requesting a proposal. The reviewed changes appear after the model responds." }),
+    h("span", { class: "code-progress-label", text: "Starting…" }),
     h("div", { class: "code-progress-track", "aria-hidden": "true" }, h("i")),
+    projectFeed,
   );
+  const projectProgressLabel = projectProgress.querySelector<HTMLElement>(".code-progress-label")!;
+  function appendProjectFeed(stage: string, detail: string) {
+    const labels: Record<string, string> = {
+      scan: "Project scan",
+      context: "Context ready",
+      generate: "Generating",
+      validate: "Review checks",
+      ready: "Proposal ready",
+      failed: "Could not finish",
+    };
+    projectProgressLabel.textContent = detail;
+    projectProgress.classList.toggle("is-complete", stage === "ready" || stage === "failed");
+    projectFeed.append(h("div", { class: `code-live-feed-item ${stage}` },
+      h("span", { class: "code-live-feed-icon", "aria-hidden": "true", text: stage === "failed" ? "!" : stage === "ready" ? "✓" : "·" }),
+      h("span", { class: "code-live-feed-label", text: labels[stage] ?? "Progress" }),
+      h("span", { class: "code-live-feed-detail", text: detail }),
+    ));
+    while (projectFeed.childElementCount > 8) projectFeed.firstElementChild?.remove();
+    projectFeed.scrollTop = projectFeed.scrollHeight;
+  }
   const projectChanges = h("div", {
     class: "code-changes",
     role: "region",
@@ -1343,12 +1366,20 @@ function buildTools(actions: ViewActions, askView: ViewHost): ViewHost {
     clear(projectChanges);
     askView.dismissCodeReview?.();
     projectProgress.hidden = false;
+    projectProgress.classList.remove("is-complete");
+    clear(projectFeed);
+    projectFeed.hidden = false;
+    appendProjectFeed("scan", "Scanning the selected project for supported source files…");
     projectStatus.textContent = "Working on a proposal. No files will be changed during generation.";
     generateCode.textContent = "Generating…";
     Sound.play("send");
     try {
       localStorage.setItem(workspaceKey, root);
-      const proposal = await Bridge.generateCodeChanges(root, instructions);
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const proposal = await Bridge.generateCodeChanges(root, instructions, requestId, (progress) => {
+        appendProjectFeed(progress.stage, progress.detail);
+        if (progress.stage === "failed") projectStatus.textContent = progress.detail;
+      });
       currentProposal = proposal;
       currentProposalRoot = root;
       projectStatus.textContent = "Proposal ready. Review the diffs and choose Accept & apply changes or Reject changes.";
@@ -1360,9 +1391,12 @@ function buildTools(actions: ViewActions, askView: ViewHost): ViewHost {
       Sound.play("finish");
     } catch (error) {
       projectStatus.textContent = String(error).replace(/^Error:\s*/, "");
+      if (!projectFeed.lastElementChild?.classList.contains("failed")) {
+        appendProjectFeed("failed", projectStatus.textContent);
+      }
       Sound.play("error");
     } finally {
-      projectProgress.hidden = true;
+      projectProgress.hidden = false;
       generateCode.disabled = false;
       generateCode.textContent = "Generate code";
       applyProposal.disabled = false;
@@ -1705,18 +1739,21 @@ function buildTools(actions: ViewActions, askView: ViewHost): ViewHost {
       h("div", { class: "tool-section" }, h("div", { class: "tool-title", text: "Reminders" }), h("div", { class: "tool-row" }, alarmInput, addAlarm), alarmList),
       h("div", { class: "tool-section code-agent" },
         h("div", { class: "tool-title", text: "Code with ACT 3" }),
-        h("div", { class: "tool-muted", text: "Describe a code change; ACT 3 reads a bounded set of source files, generates edits, and can apply them in this project. It never runs commands." }),
-        h("div", { class: "tool-row project-path-row" }, rootInput, chooseProject, editorSelect, openProject),
-        h("div", { class: "tool-row project-actions" }, summarizeProject, useProjectInAsk, copyProjectSummary),
-        projectSummary,
+        h("div", { class: "tool-muted", text: "Generate a reviewable proposal. Nothing changes until you approve it." }),
+        h("div", { class: "tool-row project-path-row" }, rootInput, chooseProject),
         projectPrompt,
-        projectProgress,
         h("div", { class: "tool-row code-agent-actions" },
-          h("span", { class: "tool-muted", text: "Every generated edit waits for your review and approval." }),
           generateCode,
         ),
         projectStatus,
+        projectProgress,
         projectChangesSlot,
+        h("details", { class: "code-project-options" },
+          h("summary", { text: "Project tools" }),
+          h("div", { class: "tool-row project-actions" }, editorSelect, openProject),
+          h("div", { class: "tool-row project-actions" }, summarizeProject, useProjectInAsk, copyProjectSummary),
+          projectSummary,
+        ),
       ),
       h("div", { class: "tool-section file-tools" },
         h("div", { class: "tool-title", text: "File tools" }),
@@ -1816,7 +1853,7 @@ export function buildViews(
     const codePanel = h("div", { class: "ask-inline-panel", "data-ask-panel": "code" });
     for (const child of Array.from(toolGrid.children)) {
       if (child.classList.contains("hook-request")) continue;
-      if (child.classList.contains("code-agent") || child.classList.contains("live-code-panel")) {
+      if (child.classList.contains("code-agent")) {
         codePanel.append(child);
       }
     }
