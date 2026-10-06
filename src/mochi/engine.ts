@@ -227,7 +227,7 @@ export class BotEngine {
   private miniLookTarget = { x: 0, y: 0 };
   private miniLookNextTime = 0;
 
-  /** Fired when three slaps land inside 1.7 s (→ dizzy + confused view). */
+  /** Fired when three slaps land inside 3.5 s (→ dizzy + confused view). */
   onDizzy: (() => void) | null = null;
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -314,7 +314,7 @@ export class BotEngine {
     this.interruptGreet();
     if (this.state === "dizzy") return;
     const t = now();
-    this.slapTimes = this.slapTimes.filter((s) => t - s < 1.7);
+    this.slapTimes = this.slapTimes.filter((s) => t - s < 3.5);
     this.slapTimes.push(t);
     Sound.play("slap");
     this.squash();

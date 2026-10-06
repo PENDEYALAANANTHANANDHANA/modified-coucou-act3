@@ -584,7 +584,8 @@ export class Island {
       if (State.mode === "hidden") this.fsm.mouseEntered();
     });
 
-    this.islandEl.addEventListener("mousedown", (e) => {
+    this.islandEl.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
       Sound.resume();
       State.lastActivity = performance.now();
       if (State.mode !== "expanded") {
