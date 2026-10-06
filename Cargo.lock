@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "act3"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "arboard",
  "gtk",
@@ -26,7 +26,7 @@ dependencies = [
 
 [[package]]
 name = "act3-hook"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "libc",
  "serde_json",

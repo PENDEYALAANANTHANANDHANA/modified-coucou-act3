@@ -84,10 +84,10 @@ reviewed, applying is refused and you can generate a fresh proposal. Use
 `code` command must be available on PATH. Online providers receive the selected
 source context; use Ollama for local-only model inference.
 
-The **Ask → Code** tab focuses on ACT 3's own project workflow: live generation
-milestones, a reviewable proposal, and bounded diffs. Additional project
-utilities are tucked under **Project tools**. Nothing is written until you
-explicitly approve the proposal.
+The **Ask → Code** tab focuses on starting a project proposal. Follow confirmed
+generation milestones in the separate **Live** tab; proposed edits are shown for
+review and nothing is written until you explicitly approve them. Additional
+project utilities are tucked under **Project tools**.
 
 Use **Summarize project** for an AI-generated overview, or **Ask about project**
 to attach the bounded source snapshot to an Ask conversation. In Ask, **Attach

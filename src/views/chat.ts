@@ -565,6 +565,9 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     dismissCodeReview() {
       dismissCodeReview();
     },
+    selectAskPanel(id) {
+      selectAskTab(id);
+    },
     attachAskPanels(panels, sync, tick) {
       syncAskPanel = sync;
       tickAskPanel = tick;

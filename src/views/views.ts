@@ -92,6 +92,7 @@ export interface ViewActions {
 export interface ViewHost {
   el: HTMLElement;
   sync(): void;
+  selectAskPanel?(id: string): void;
   showCodeReview?(content: HTMLElement, onDismiss: () => void): void;
   dismissCodeReview?(): void;
   attachAskPanels?(
@@ -1162,6 +1163,16 @@ function buildTools(actions: ViewActions, askView: ViewHost): ViewHost {
     h("div", { class: "code-progress-track", "aria-hidden": "true" }, h("i")),
     projectFeed,
   );
+  const projectLiveEmpty = h("div", {
+    class: "code-live-empty-state",
+    text: "Start a code proposal from the Code tab. Generation and review milestones will appear here.",
+  });
+  const projectLiveSection = h("div", { class: "tool-section code-live-section" },
+    h("div", { class: "tool-title", text: "Live coding" }),
+    h("div", { class: "tool-muted", text: "ACT 3 project generation progress. Proposed edits remain review-only until you approve them." }),
+    projectLiveEmpty,
+    projectProgress,
+  );
   const projectProgressLabel = projectProgress.querySelector<HTMLElement>(".code-progress-label")!;
   function appendProjectFeed(stage: string, detail: string) {
     const labels: Record<string, string> = {
@@ -1366,12 +1377,14 @@ function buildTools(actions: ViewActions, askView: ViewHost): ViewHost {
     clear(projectChanges);
     askView.dismissCodeReview?.();
     projectProgress.hidden = false;
+    projectLiveEmpty.hidden = true;
     projectProgress.classList.remove("is-complete");
     clear(projectFeed);
     projectFeed.hidden = false;
     appendProjectFeed("scan", "Scanning the selected project for supported source files…");
     projectStatus.textContent = "Working on a proposal. No files will be changed during generation.";
     generateCode.textContent = "Generating…";
+    askView.selectAskPanel?.("live");
     Sound.play("send");
     try {
       localStorage.setItem(workspaceKey, root);
@@ -1746,7 +1759,6 @@ function buildTools(actions: ViewActions, askView: ViewHost): ViewHost {
           generateCode,
         ),
         projectStatus,
-        projectProgress,
         projectChangesSlot,
         h("details", { class: "code-project-options" },
           h("summary", { text: "Project tools" }),
@@ -1755,6 +1767,7 @@ function buildTools(actions: ViewActions, askView: ViewHost): ViewHost {
           projectSummary,
         ),
       ),
+      projectLiveSection,
       h("div", { class: "tool-section file-tools" },
         h("div", { class: "tool-title", text: "File tools" }),
         h("div", { class: "tool-row" }, fileQuery, searchFiles),
@@ -1860,8 +1873,16 @@ export function buildViews(
     if (!codePanel.childElementCount) {
       codePanel.append(h("div", { class: "tool-muted", text: "Code tools are unavailable." }));
     }
+    const livePanel = h("div", { class: "ask-inline-panel code-live-panel" });
+    for (const child of Array.from(toolGrid.children)) {
+      if (child.classList.contains("code-live-section")) livePanel.append(child);
+    }
+    if (!livePanel.childElementCount) {
+      livePanel.append(h("div", { class: "tool-muted", text: "Live coding updates will appear here." }));
+    }
     prompt.attachAskPanels?.([
       { id: "code", label: "Code", element: codePanel },
+      { id: "live", label: "Live", element: livePanel },
     ], () => tools.sync(), (nowMs) => tools.tick?.(nowMs));
   }
   map.set("prompt", prompt);
