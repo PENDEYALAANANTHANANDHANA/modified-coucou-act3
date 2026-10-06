@@ -28,6 +28,24 @@ export interface ApprovalInfo {
   command: string;
 }
 
+export interface HookQuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface HookQuestionItem {
+  question: string;
+  header: string;
+  options: HookQuestionOption[];
+  multiSelect: boolean;
+}
+
+export interface PendingQuestion {
+  requestId: string;
+  sessionId: string;
+  questions: HookQuestionItem[];
+}
+
 export interface ChatMessage {
   id: number;
   role: "user" | "assistant";
@@ -197,6 +215,7 @@ class AppState {
   };
   promptPrefill = "";
   pendingApproval: ApprovalInfo | null = null;
+  pendingQuestion: PendingQuestion | null = null;
 
   integrations: Record<string, IntegrationInfo> = {};
 

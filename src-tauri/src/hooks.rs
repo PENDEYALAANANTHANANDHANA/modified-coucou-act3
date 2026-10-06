@@ -17,12 +17,12 @@ use tauri::{AppHandle, Manager};
 use crate::{platform, settings};
 
 /// Every event the island reacts to, with the hook timeout written to settings.json.
-/// PermissionRequest waits for a human, so it gets the decision timeout + 10 s.
+/// Human decisions need the longer limit for permissions and AskUserQuestion.
 pub const HOOK_EVENTS: &[(&str, u64)] = &[
     ("SessionStart", 10),
     ("SessionEnd", 10),
     ("UserPromptSubmit", 10),
-    ("PreToolUse", 10),
+    ("PreToolUse", 120),
     ("PostToolUse", 10),
     ("PostToolUseFailure", 10),
     ("PermissionRequest", 120),

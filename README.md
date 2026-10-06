@@ -51,13 +51,13 @@ ACT 3 opens the matching GitHub Release so you can download and run the installe
 | `Esc` | Closes the island |
 | Tray icon | Open, Settings…, Pause, Quit |
 
-Everything else happens on its own: a Claude Code permission request opens the
-island with **Deny / Allow**, a finished session shows what it did, and
+Everything else happens on its own: Claude Code permission and question prompts
+open in the island's **Tools** tab, a finished session shows what it did, and
 your integrations sit in the coloured pills next to Mochi.
 
 ### Tasks
 
-Open the **Tools** tab to run a quick action or make a reusable task. Quick
+Open **Ask → Tasks** to run a quick action or make a reusable task. Quick
 actions understand commands such as **“open this”**, **“make a text file on
 desktop”**, **“search cats”**, and **“start a 25 minute timer”**. Creating a
 Desktop note opens it in the default text editor and never overwrites an
@@ -70,7 +70,7 @@ not modified; text edits are limited to 1 MB files.
 
 ### Code with ACT 3
 
-In **Tools → Code with ACT 3**, enter a project folder and describe the change.
+In **Ask → Code**, enter a project folder and describe the change.
 ACT 3 sends at most 40 source files (200 KB total) to your selected model,
 displays the generated files for review, and applies changes only when you click
 **Apply changes**. You can opt into automatic application, which skips that
@@ -94,11 +94,17 @@ will change in `%USERPROFILE%\.claude\settings.json`, the path of the dated back
 that will be taken, and nothing is written until you click. Your own hooks are
 never touched, and uninstalling removes only Coucou's entries.
 
+Permission requests appear in **Tools**, where you can review the command or
+file path before choosing **Deny** or **Allow**. Claude Code's
+`AskUserQuestion` prompts also appear there: select one or more choices, move
+through multi-part questions, or type a custom answer. Choosing **Answer in
+terminal** safely hands the question back to Claude Code's terminal.
+
 The relay is a tiny executable, `coucou-hook.exe`, copied to
 `%LOCALAPPDATA%\Coucou\bin\` at launch. It is given 300 ms to reach Coucou and
 exits cleanly if the app is closed, slow or crashed — **a Claude Code session is
-never blocked or slowed down by Coucou.** If nobody answers a permission request
-in time, Coucou stays quiet and Claude Code asks in the terminal as usual.
+never blocked or slowed down by Coucou.** If nobody answers a request in time,
+Coucou stays quiet and Claude Code asks in the terminal as usual.
 
 It works from any terminal — Windows Terminal, PowerShell, VS Code, Git Bash.
 

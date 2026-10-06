@@ -10,9 +10,8 @@
 //! * Every step runs under a deadline enforced by the main thread, so a pipe that
 //!   accepts the connection and then stops reading cannot wedge the session
 //!   either: we abandon the worker and exit.
-//! * Only `PermissionRequest` waits for an answer, because approving from the
-//!   island is the whole point. No answer means empty stdout, and Claude Code
-//!   asks in the terminal exactly as if Coucou were not installed.
+//! * Only permission requests and `AskUserQuestion` wait for an answer. No answer
+//!   means empty stdout, and Claude Code asks in the terminal as usual.
 //!
 //! Usage: `coucou-hook <EventName>` (the name is also read from the JSON).
 
@@ -47,20 +46,21 @@ use unix::connect;
 fn main() {
     let Some((payload, event)) = read_event() else { std::process::exit(0) };
 
-    let waits_for_answer = event == "PermissionRequest";
+    let waits_for_answer = event == "PermissionRequest" || is_question_request(&payload, &event);
     let budget = if waits_for_answer { DECISION_BUDGET } else { FIRE_AND_FORGET_BUDGET };
 
     // The worker owns every blocking call. If it overruns the budget we simply
     // stop listening and exit: the process dying takes the pipe handle with it.
     // (No catch_unwind here — the release profile is panic = "abort", so it would
     // be dead code. `talk` is written to have nothing to panic on instead.)
-    let (tx, rx) = mpsc::channel::<Option<String>>();
+    let (tx, rx) = mpsc::channel::<(Option<String>, String)>();
     std::thread::spawn(move || {
-        let _ = tx.send(talk(&payload, waits_for_answer));
+        let result = talk(&payload, waits_for_answer);
+        let _ = tx.send((result, payload));
     });
 
-    if let Ok(Some(decision)) = rx.recv_timeout(budget) {
-        if let Some(json) = decision_json(&decision) {
+    if let Ok((Some(decision), payload)) = rx.recv_timeout(budget) {
+        if let Some(json) = decision_json(&decision, &payload) {
             let mut out = std::io::stdout();
             let _ = writeln!(out, "{json}");
             let _ = out.flush();
@@ -70,10 +70,33 @@ fn main() {
     std::process::exit(0);
 }
 
-/// The documented PermissionRequest output. Anything we do not recognise prints
-/// nothing at all rather than guessing — silence is the safe answer.
+/// The documented hook output. Anything we do not recognise prints nothing at
+/// all rather than guessing — silence is the safe answer.
 /// See https://code.claude.com/docs/en/hooks
-fn decision_json(decision: &str) -> Option<String> {
+fn decision_json(decision: &str, payload: &str) -> Option<String> {
+    if let Ok(response) = serde_json::from_str::<serde_json::Value>(decision.trim()) {
+        if response.get("coucouDecision").and_then(|v| v.as_str()) == Some("answer") {
+            let answers = response.get("answers")?.as_object()?;
+            if answers.is_empty() {
+                return None;
+            }
+            let original = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+            let questions = original
+                .get("tool_input")?
+                .get("questions")?
+                .as_array()?;
+            return Some(serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "updatedInput": {
+                        "questions": questions,
+                        "answers": answers,
+                    },
+                },
+            }).to_string());
+        }
+    }
     let behavior = match decision.trim() {
         // "always" still answers a plain allow; remembering it is the island's
         // business, not Claude Code's.
@@ -84,6 +107,17 @@ fn decision_json(decision: &str) -> Option<String> {
     Some(format!(
         r#"{{"hookSpecificOutput":{{"hookEventName":"PermissionRequest","decision":{behavior}}}}}"#
     ))
+}
+
+fn is_question_request(payload: &str, event: &str) -> bool {
+    if event != "PreToolUse" {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(payload)
+        .ok()
+        .and_then(|value| value.get("tool_name").and_then(|v| v.as_str()).map(str::to_owned))
+        .as_deref()
+        == Some("AskUserQuestion")
 }
 
 /// Reads stdin and returns the payload to forward plus the event name.
@@ -226,23 +260,50 @@ mod tests {
     #[test]
     fn decision_json_matches_the_documented_shape() {
         assert_eq!(
-            decision_json("allow").unwrap(),
+            decision_json("allow", "{}").unwrap(),
             r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
         );
         assert_eq!(
-            decision_json("deny").unwrap(),
+            decision_json("deny", "{}").unwrap(),
             r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Denied from Coucou"}}}"#
         );
         // "always" is an island concept; Claude Code just gets an allow.
-        assert!(decision_json("always").unwrap().contains(r#""behavior":"allow""#));
+        assert!(decision_json("always", "{}").unwrap().contains(r#""behavior":"allow""#));
+    }
+
+    #[test]
+    fn ask_user_question_answers_return_updated_input() {
+        let payload = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "AskUserQuestion",
+            "tool_input": { "questions": [{ "question": "Which?", "options": [] }] }
+        }).to_string();
+        let decision = serde_json::json!({
+            "coucouDecision": "answer",
+            "answers": { "Which?": "First" }
+        }).to_string();
+        let output: serde_json::Value =
+            serde_json::from_str(&decision_json(&decision, &payload).unwrap()).unwrap();
+        assert_eq!(output["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
+        assert_eq!(output["hookSpecificOutput"]["updatedInput"]["questions"][0]["question"], "Which?");
+        assert_eq!(output["hookSpecificOutput"]["updatedInput"]["answers"]["Which?"], "First");
+    }
+
+    #[test]
+    fn only_ask_user_question_tool_calls_wait_for_answers() {
+        let question = r#"{"tool_name":"AskUserQuestion"}"#;
+        assert!(is_question_request(question, "PreToolUse"));
+        assert!(!is_question_request(question, "PostToolUse"));
+        assert!(!is_question_request(r#"{"tool_name":"Read"}"#, "PreToolUse"));
     }
 
     #[test]
     fn anything_unrecognised_prints_nothing() {
-        assert!(decision_json("").is_none());
-        assert!(decision_json("maybe").is_none());
+        assert!(decision_json("", "{}").is_none());
+        assert!(decision_json("maybe", "{}").is_none());
         // The shape the app used to send must not be mistaken for a decision.
-        assert!(decision_json(r#"{"permissionDecision":"allow"}"#).is_none());
+        assert!(decision_json(r#"{"permissionDecision":"allow"}"#, "{}").is_none());
     }
 
     #[test]

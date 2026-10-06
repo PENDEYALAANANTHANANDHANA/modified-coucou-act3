@@ -146,6 +146,30 @@ export class Island {
         State.setPillBadge("integration_claude", null);
         this.setView(State.defaultView());
       },
+      answerQuestion: async (answers) => {
+        const request = State.pendingQuestion;
+        if (!request) return;
+        await Bridge.answerQuestion(request.requestId, answers);
+        if (State.pendingQuestion?.requestId !== request.requestId) return;
+        State.pendingQuestion = null;
+        State.isPinned = false;
+        this.fsm.pinned = false;
+        State.updateTask("integration_claude", "working");
+        State.setPillBadge("integration_claude", null);
+        this.setView(State.defaultView());
+      },
+      declineQuestion: async () => {
+        const request = State.pendingQuestion;
+        if (!request) return;
+        await Bridge.releaseQuestion(request.requestId);
+        if (State.pendingQuestion?.requestId !== request.requestId) return;
+        State.pendingQuestion = null;
+        State.isPinned = false;
+        this.fsm.pinned = false;
+        State.updateTask("integration_claude", "working");
+        State.setPillBadge("integration_claude", null);
+        this.setView(State.defaultView());
+      },
       toggleSound: () => {
         State.settings.soundEnabled = !State.settings.soundEnabled;
         Sound.setEnabled(State.settings.soundEnabled);

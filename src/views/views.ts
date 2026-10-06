@@ -5,7 +5,7 @@
 import { h, svg, clear, dot } from "./dom";
 import { ICONS } from "./icons";
 import { Ticker } from "./ticker";
-import { State, type AgentTask } from "../core/state";
+import { State, type AgentTask, type PendingQuestion } from "../core/state";
 import { washRGBA, type IslandViewName, type Wash } from "../core/layout";
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
@@ -24,6 +24,8 @@ export interface ViewActions {
   openTarget(): void;
   openUrl(url: string): void;
   decide(d: "allow" | "deny"): void;
+  answerQuestion(answers: Record<string, string | string[]>): Promise<void>;
+  declineQuestion(): Promise<void>;
   toggleSound(): void;
   setVolume(v: number): void;
   setAutoClose(seconds: number): void;
@@ -486,6 +488,172 @@ function buildSettings(actions: ViewActions): ViewHost {
 }
 
 function buildTools(actions: ViewActions): ViewHost {
+  const requestSection = h("div", { class: "tool-section hook-request", hidden: true });
+  const requestBody = h("div", { class: "hook-request-body" });
+  const requestStatus = h("div", { class: "tool-muted hook-request-status" });
+  let renderedRequest = "";
+
+  function renderQuestion(question: PendingQuestion) {
+    const selected = question.questions.map((): string[] => []);
+    const otherAnswers = question.questions.map(() => "");
+    const otherOpen = question.questions.map(() => false);
+    const content = h("div", { class: "hook-question-content" });
+    let questionIndex = 0;
+    const renderCurrent = () => {
+      const item = question.questions[questionIndex];
+      const choices = selected[questionIndex];
+      const hasAnswer = otherOpen[questionIndex]
+        ? otherAnswers[questionIndex].trim().length > 0
+        : choices.length > 0;
+      const optionButtons = item.options.map((option) => h("button", {
+        class: `hook-answer-option${choices.includes(option.label) ? " selected" : ""}`,
+        type: "button",
+        title: option.description,
+        text: option.label,
+        onclick: () => {
+          if (item.multiSelect) {
+            const at = choices.indexOf(option.label);
+            if (at < 0) choices.push(option.label);
+            else choices.splice(at, 1);
+          } else {
+            choices.splice(0, choices.length, option.label);
+          }
+          otherOpen[questionIndex] = false;
+          renderCurrent();
+        },
+      }) as HTMLButtonElement);
+      const actionRow = h("div", { class: "tool-actions hook-question-actions" });
+      const finishOrNext = btn(questionIndex === question.questions.length - 1 ? "Send answer" : "Next", "primary", () => {
+        if (questionIndex < question.questions.length - 1) {
+          questionIndex++;
+          renderCurrent();
+          return;
+        }
+        const answers: Record<string, string | string[]> = {};
+        question.questions.forEach((item, index) => {
+          const value = otherOpen[index] ? otherAnswers[index].trim() : selected[index];
+          answers[item.question] = item.multiSelect
+            ? typeof value === "string" ? [value] : value
+            : typeof value === "string" ? value : value[0];
+        });
+        finishOrNext.disabled = true;
+        requestStatus.textContent = "Sending your answer…";
+        void actions.answerQuestion(answers).then(
+          () => { requestStatus.textContent = "Answer sent to Claude Code."; },
+          (error: unknown) => {
+            requestStatus.textContent = `Could not send the answer: ${String(error).replace(/^Error:\s*/, "")}`;
+            finishOrNext.disabled = false;
+          },
+        );
+      }) as HTMLButtonElement;
+      finishOrNext.disabled = !hasAnswer;
+      actionRow.append(finishOrNext);
+      const terminal = btn("Answer in terminal", "secondary", () => {
+        requestStatus.textContent = "Returning the question to Claude Code…";
+        void actions.declineQuestion().catch((error: unknown) => {
+          requestStatus.textContent = `Could not return the question: ${String(error).replace(/^Error:\s*/, "")}`;
+        });
+      });
+      actionRow.append(terminal);
+
+      const questionHeading = h("div", { class: "hook-question-heading" },
+        h("span", { class: "tool-label", text: "Claude Code is asking" }),
+      );
+      if (question.questions.length > 1) {
+        questionHeading.append(h("span", {
+          class: "tool-muted",
+          text: `${questionIndex + 1} / ${question.questions.length}`,
+        }));
+      }
+      clear(content);
+      content.append(
+        questionHeading,
+        ...(item.header ? [h("span", { class: "tool-muted hook-question-category", text: item.header })] : []),
+        h("strong", { class: "hook-question-title", text: item.question }),
+      );
+      if (otherOpen[questionIndex]) {
+        const answer = h("input", {
+          class: "tool-input hook-answer-text",
+          type: "text",
+          maxlength: "1000",
+          placeholder: "Type your answer…",
+          value: otherAnswers[questionIndex],
+          oninput: (event: Event) => {
+            otherAnswers[questionIndex] = (event.currentTarget as HTMLInputElement).value;
+            finishOrNext.disabled = !otherAnswers[questionIndex].trim();
+          },
+        }) as HTMLInputElement;
+        content.append(
+          answer,
+          h("button", {
+            class: "tool-link",
+            type: "button",
+            text: "Choose from the options",
+            onclick: () => { otherOpen[questionIndex] = false; renderCurrent(); },
+          }),
+        );
+        requestAnimationFrame(() => answer.focus());
+      } else {
+        content.append(
+          h("div", { class: "hook-answer-options" }, ...optionButtons),
+          h("button", {
+            class: "tool-link",
+            type: "button",
+            text: "Type a different answer…",
+            onclick: () => {
+              otherOpen[questionIndex] = true;
+              selected[questionIndex] = [];
+              renderCurrent();
+            },
+          }),
+        );
+      }
+      content.append(actionRow);
+    };
+    requestStatus.textContent = "";
+    requestBody.append(content);
+    renderCurrent();
+  }
+
+  function renderPendingRequest() {
+    const approval = State.pendingApproval;
+    const question = State.pendingQuestion;
+    if (!approval && !question) {
+      requestSection.hidden = true;
+      renderedRequest = "";
+      clear(requestBody);
+      requestStatus.textContent = "";
+      return;
+    }
+    const key = question ? `question:${question.requestId}` : `approval:${approval!.requestId}`;
+    requestSection.hidden = false;
+    if (key === renderedRequest) return;
+    renderedRequest = key;
+    clear(requestBody);
+    requestStatus.textContent = "";
+    if (question) {
+      requestSection.dataset.kind = "question";
+      requestSection.append(
+        h("div", { class: "hook-request-heading", text: "Claude Code needs your input" }),
+        requestBody,
+        requestStatus,
+      );
+      renderQuestion(question);
+    } else if (approval) {
+      requestSection.dataset.kind = "approval";
+      requestBody.append(
+        h("div", { class: "hook-request-heading", text: "Permission request" }),
+        h("div", { class: "tool-muted", text: `${State.tasks.find((task) => task.id === "integration_claude")?.name ?? "Claude Code"} wants to use ${approval.tool}.` }),
+        h("pre", { class: "hook-request-detail", text: approval.command }),
+        h("div", { class: "tool-actions" },
+          btn("Deny", "secondary", () => actions.decide("deny")),
+          btn("Allow", "primary", () => actions.decide("allow")),
+        ),
+      );
+      requestSection.append(requestBody, requestStatus);
+    }
+  }
+
   const search = h("input", { class: "tool-input", placeholder: "Search YouTube or the web…" }) as HTMLInputElement;
   const youtube = btn("YouTube", "secondary", () => {
     const q = search.value.trim();
@@ -888,6 +1056,7 @@ function buildTools(actions: ViewActions): ViewHost {
   });
   const el = h("div", { class: "view tools-view" },
     card("indigo", h("div", { class: "tool-grid" },
+      requestSection,
       h("div", { class: "tool-section task-runner" },
         h("div", { class: "tool-title", text: "Quick actions" }),
         h("div", { class: "tool-row quick-task-row" }, taskInput, runTask),
@@ -929,6 +1098,7 @@ function buildTools(actions: ViewActions): ViewHost {
   return {
     el,
     sync() {
+      renderPendingRequest();
       const nowMs = performance.now();
       if (timerRunning && timerSeconds > 0) {
         const elapsed = Math.floor((nowMs - lastTimerTick) / 1000);
@@ -996,6 +1166,7 @@ export function buildViews(
     const codePanel = h("div", { class: "ask-inline-panel", "data-ask-panel": "code" });
     const morePanel = h("div", { class: "ask-inline-panel", "data-ask-panel": "more" });
     for (const child of Array.from(toolGrid.children)) {
+      if (child.classList.contains("hook-request")) continue;
       if (child.classList.contains("task-runner") || child.classList.contains("task-maker")) {
         taskPanel.append(child);
       } else if (child.classList.contains("code-agent")) {
