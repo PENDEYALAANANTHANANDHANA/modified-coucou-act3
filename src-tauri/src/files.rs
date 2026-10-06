@@ -12,7 +12,7 @@ use crate::settings;
 
 const KEEP_FOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 pub const MAX_DROPPED_FILES: usize = 20;
-const MAX_DROPPED_FILE_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_DROPPED_FILE_BYTES: u64 = 30 * 1024 * 1024;
 const MAX_DROP_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_FOLDER_DEPTH: usize = 8;
 const MAX_FOLDER_ENTRIES: usize = 10_000;
@@ -45,7 +45,7 @@ pub fn ingest(source: &str) -> Result<DroppedFile, String> {
         return Err(format!("Only regular files can be dropped: {source}."));
     }
     if meta.len() > MAX_DROPPED_FILE_BYTES {
-        return Err(format!("{source} is larger than the 10 MB per-file limit."));
+        return Err(format!("{source} is larger than the 30 MB per-file limit."));
     }
 
     let dir = inbox_dir();
@@ -118,7 +118,7 @@ pub fn ingest_many(sources: &[String]) -> Result<Vec<DroppedFile>, String> {
             return Err(format!("Only files and folders containing documents can be dropped: {source}."));
         }
         if metadata.len() > MAX_DROPPED_FILE_BYTES {
-            return Err(format!("{source} is larger than the 10 MB per-file limit."));
+            return Err(format!("{source} is larger than the 30 MB per-file limit."));
         }
         total_bytes = total_bytes.saturating_add(metadata.len());
         if total_bytes > MAX_DROP_BYTES {
@@ -341,6 +341,47 @@ mod tests {
         for file in copied {
             std::fs::remove_file(file.path).unwrap();
         }
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn ingest_many_accepts_a_30_mb_file_from_outside_the_inbox() {
+        let tmp = std::env::temp_dir().join(format!(
+            "act3-30mb-test-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let source = tmp.join("large.txt");
+        std::fs::File::create(&source)
+            .unwrap()
+            .set_len(MAX_DROPPED_FILE_BYTES)
+            .unwrap();
+
+        let copied = ingest_many(&[source.to_string_lossy().into_owned()]).unwrap();
+        assert_eq!(copied.len(), 1);
+        assert_eq!(copied[0].size, 30 * 1024 * 1024);
+        assert_eq!(std::fs::metadata(&copied[0].path).unwrap().len(), 30 * 1024 * 1024);
+        std::fs::remove_file(&copied[0].path).unwrap();
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn ingest_many_rejects_a_file_larger_than_30_mb() {
+        let tmp = std::env::temp_dir().join(format!(
+            "act3-over-30mb-test-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let source = tmp.join("too-large.txt");
+        std::fs::File::create(&source)
+            .unwrap()
+            .set_len(MAX_DROPPED_FILE_BYTES + 1)
+            .unwrap();
+
+        let error = ingest_many(&[source.to_string_lossy().into_owned()]).unwrap_err();
+        assert!(error.contains("30 MB per-file limit"));
         std::fs::remove_dir_all(tmp).unwrap();
     }
 

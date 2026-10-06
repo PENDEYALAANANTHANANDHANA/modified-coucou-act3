@@ -6,15 +6,70 @@ import { h, svg, clear, dot } from "./dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ICONS } from "./icons";
 import { Ticker } from "./ticker";
-import { State, type AgentTask, type PendingQuestion } from "../core/state";
+import { State, type AgentTask, type LiveCodeChange, type PendingMcpApproval, type PendingQuestion } from "../core/state";
 import { washRGBA, type IslandViewName, type Wash } from "../core/layout";
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
-import { Bridge, type CodeProposal } from "../core/bridge";
+import { Bridge, type CodeProposal, type McpTool, type WindowAction } from "../core/bridge";
 import { Sound } from "../core/sound";
 import { executeTask, parseTask, TASK_HELP } from "../tools/task-runner";
+
+type ProjectEditor = "vscode" | "cursor" | "system";
+
+function selectedProjectEditor(select: HTMLSelectElement): ProjectEditor {
+  if (select.value === "vscode" || select.value === "cursor") return select.value;
+  return "system";
+}
+
+function liveDiff(change: LiveCodeChange): HTMLElement {
+  const maxChars = 20_000;
+  const maxLines = 120;
+  const oldText = change.oldText.slice(0, maxChars);
+  const newText = change.newText.slice(0, maxChars);
+  const oldLines = oldText.split(/\r?\n/).slice(0, maxLines);
+  const newLines = newText.split(/\r?\n/).slice(0, maxLines);
+  const truncated = oldText.length < change.oldText.length || newText.length < change.newText.length
+    || oldText.split(/\r?\n/).length > maxLines || newText.split(/\r?\n/).length > maxLines;
+  const table = Array.from({ length: oldLines.length + 1 }, () => new Uint16Array(newLines.length + 1));
+  for (let i = oldLines.length - 1; i >= 0; i--) {
+    for (let j = newLines.length - 1; j >= 0; j--) {
+      table[i][j] = oldLines[i] === newLines[j]
+        ? table[i + 1][j + 1] + 1
+        : Math.max(table[i + 1][j], table[i][j + 1]);
+    }
+  }
+  const result: { kind: "same" | "removed" | "added"; text: string }[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < oldLines.length && j < newLines.length) {
+    if (oldLines[i] === newLines[j]) {
+      result.push({ kind: "same", text: oldLines[i++] });
+      j++;
+    } else if (table[i + 1][j] >= table[i][j + 1]) {
+      result.push({ kind: "removed", text: oldLines[i++] });
+    } else {
+      result.push({ kind: "added", text: newLines[j++] });
+    }
+  }
+  while (i < oldLines.length) result.push({ kind: "removed", text: oldLines[i++] });
+  while (j < newLines.length) result.push({ kind: "added", text: newLines[j++] });
+  const diff = h("div", { class: "live-diff" });
+  if (truncated) {
+    diff.append(h("div", {
+      class: "live-diff-truncated",
+      text: `Showing a bounded preview of the edit (maximum ${maxLines} lines per side).`,
+    }));
+  }
+  result.forEach((line) => {
+    diff.append(h("div", { class: `live-diff-line ${line.kind}` },
+      h("span", { class: "live-diff-gutter", "aria-hidden": "true", text: line.kind === "added" ? "+" : line.kind === "removed" ? "−" : " " }),
+      h("code", { text: line.text || " " }),
+    ));
+  });
+  return diff;
+}
 
 export interface ViewActions {
   setView(v: IslandViewName): void;
@@ -30,8 +85,6 @@ export interface ViewActions {
   toggleSound(): void;
   setVolume(v: number): void;
   setAutoClose(seconds: number): void;
-  browseFiles(): void;
-  browseFolder(): void;
   openSettingsWindow(): void;
   blip(): void;
 }
@@ -39,6 +92,8 @@ export interface ViewActions {
 export interface ViewHost {
   el: HTMLElement;
   sync(): void;
+  showCodeReview?(content: HTMLElement, onDismiss: () => void): void;
+  dismissCodeReview?(): void;
   attachAskPanels?(
     panels: { id: string; label: string; element: HTMLElement }[],
     sync: () => void,
@@ -490,11 +545,73 @@ function buildSettings(actions: ViewActions): ViewHost {
   };
 }
 
-function buildTools(actions: ViewActions): ViewHost {
+function buildTools(actions: ViewActions, askView: ViewHost): ViewHost {
   const requestSection = h("div", { class: "tool-section hook-request", hidden: true });
   const requestBody = h("div", { class: "hook-request-body" });
   const requestStatus = h("div", { class: "tool-muted hook-request-status" });
   let renderedRequest = "";
+  const mcpApprovalSection = h("div", { class: "tool-section hook-request mcp-approval-queue", hidden: true });
+  const mcpApprovalStatus = h("div", { class: "tool-muted hook-request-status", "aria-live": "polite" });
+  const renderedMcpApprovalIds = { value: "" };
+
+  function renderMcpApprovals() {
+    const approvals = State.pendingMcpApprovals;
+    mcpApprovalSection.hidden = approvals.length === 0;
+    const ids = approvals.map((approval) => approval.requestId).join("|");
+    if (ids === renderedMcpApprovalIds.value) return;
+    renderedMcpApprovalIds.value = ids;
+    clear(mcpApprovalSection);
+    mcpApprovalStatus.textContent = "";
+    if (approvals.length === 0) return;
+    mcpApprovalSection.append(
+      h("div", { class: "hook-request-heading", text: "ACT 3 wants permission to use an app tool" }),
+      h("div", { class: "tool-muted", text: "Review each request. Allowing runs only this one call." }),
+    );
+    for (const approval of approvals) {
+      mcpApprovalSection.append(renderMcpApproval(approval));
+    }
+    mcpApprovalSection.append(mcpApprovalStatus);
+  }
+
+  function renderMcpApproval(approval: PendingMcpApproval): HTMLElement {
+    const itemStatus = h("div", { class: "tool-muted", "aria-live": "polite" });
+    const decision = (allow: boolean, buttons: HTMLButtonElement[]) => {
+      for (const button of buttons) button.disabled = true;
+      itemStatus.textContent = allow ? "Starting the approved tool call…" : "Sending denial…";
+      void Bridge.mcpApprovalDecision(approval.requestId, allow).then(
+        () => {
+          const index = State.pendingMcpApprovals.findIndex((item) => item.requestId === approval.requestId);
+          if (index >= 0) State.pendingMcpApprovals.splice(index, 1);
+          State.notify();
+        },
+        (error: unknown) => {
+          itemStatus.textContent = `Could not record the decision: ${String(error).replace(/^Error:\s*/, "")}`;
+          for (const button of buttons) button.disabled = false;
+        },
+      );
+    };
+    const deny = h("button", {
+      class: "btn secondary",
+      type: "button",
+      text: "Deny",
+    }) as HTMLButtonElement;
+    const allow = h("button", {
+      class: "btn primary",
+      type: "button",
+      text: "Allow once",
+    }) as HTMLButtonElement;
+    deny.addEventListener("click", () => decision(false, [deny, allow]));
+    allow.addEventListener("click", () => decision(true, [deny, allow]));
+    return h("div", { class: "mcp-approval-item" },
+      h("strong", { class: "tool-title", text: `${approval.serverName} · ${approval.toolName}` }),
+      ...(approval.description
+        ? [h("div", { class: "tool-muted", text: approval.description })]
+        : []),
+      h("pre", { class: "mcp-schema", text: JSON.stringify(approval.arguments, null, 2) }),
+      h("div", { class: "tool-actions" }, deny, allow),
+      itemStatus,
+    );
+  }
 
   function renderQuestion(question: PendingQuestion) {
     const selected = question.questions.map((): string[] => []);
@@ -906,8 +1023,176 @@ function buildTools(actions: ViewActions): ViewHost {
     class: "tool-muted",
     text: "Enter a project folder path. ACT 3 sends up to 40 source files (200 KB) to your selected model.",
   });
-  const projectChanges = h("div", { class: "code-changes" });
-  const autoApply = h("input", { type: "checkbox" }) as HTMLInputElement;
+  const liveActivityStatus = h("div", {
+    class: "tool-muted",
+    text: "Waiting for a Claude Code session. Read, edit, and command activity will appear here.",
+  });
+  const liveActivityStages = h("div", { class: "live-code-stages" });
+  const liveActivityTimeline = h("div", { class: "live-code-timeline" });
+  const liveDiffList = h("div", { class: "live-diff-list" });
+  const activitySummary = h("span", { class: "live-code-summary", text: "No activity yet" });
+  let activityFilter: "all" | "edits" | "tools" = "all";
+  const activityFilters = h("div", { class: "live-code-filters", role: "group", "aria-label": "Filter code activity" });
+  const activityFilterButtons: HTMLButtonElement[] = [];
+  for (const [value, label] of [
+    ["all", "All"],
+    ["edits", "Edits"],
+    ["tools", "Tools"],
+  ] as const) {
+    const button = h("button", {
+      class: "live-code-filter",
+      type: "button",
+      text: label,
+      "aria-pressed": value === activityFilter,
+    }) as HTMLButtonElement;
+    button.addEventListener("click", () => {
+      activityFilter = value;
+      activityFilterButtons.forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+      liveActivityPanel.dataset.key = "";
+      renderLiveActivity();
+    });
+    activityFilterButtons.push(button);
+    activityFilters.append(button);
+  }
+  const liveActivityPanel = h("div", { class: "tool-section live-code-panel" },
+    h("div", { class: "live-code-heading" },
+      h("span", { class: "live-code-pulse", "aria-hidden": "true" }),
+      h("div", {},
+        h("div", { class: "tool-title", text: "Live Claude Code session" }),
+        h("div", { class: "tool-muted", text: "Observe tool activity and inspect file edits as they happen." }),
+      ),
+      h("span", { class: "live-code-state", text: "IDLE" }),
+    ),
+    h("div", { class: "live-code-toolbar" }, activitySummary, activityFilters),
+    liveActivityStages,
+    liveActivityStatus,
+    liveActivityTimeline,
+    liveDiffList,
+  );
+  const renderLiveActivity = () => {
+    const entries = State.codeActivity.slice(-10).reverse();
+    const changes = State.liveCodeChanges.slice(-8).reverse();
+    const key = `${activityFilter}:${entries.map((entry) => `${entry.id}:${entry.status}`).join("|")}~${changes.map((change) => change.id).join("|")}`;
+    if (liveActivityPanel.dataset.key === key) return;
+    liveActivityPanel.dataset.key = key;
+    clear(liveActivityStages);
+    clear(liveActivityTimeline);
+    clear(liveDiffList);
+    if (entries.length === 0) {
+      liveActivityStatus.textContent = "Waiting for a Claude Code session. Read, edit, and command activity will appear here.";
+      liveActivityPanel.classList.remove("is-active");
+      liveActivityPanel.querySelector(".live-code-state")!.textContent = "IDLE";
+      activitySummary.textContent = "No activity yet";
+      return;
+    }
+    const allEntries = State.codeActivity;
+    const isActive = allEntries.some((entry) => entry.status === "running");
+    liveActivityPanel.classList.toggle("is-active", isActive);
+    liveActivityPanel.querySelector(".live-code-state")!.textContent = isActive ? "LIVE" : "SESSION";
+    const changedFiles = new Set(State.liveCodeChanges.map((change) => change.path)).size;
+    activitySummary.textContent = `${allEntries.length} events · ${changedFiles} ${changedFiles === 1 ? "file" : "files"} changed`;
+    const stageTools: Record<string, string[]> = {
+      Read: ["Read", "Glob", "Grep", "LS"],
+      Edit: ["Edit", "Write", "MultiEdit", "NotebookEdit"],
+      Bash: ["Bash", "PowerShell"],
+      Done: ["Done"],
+    };
+    for (const [stage, tools] of Object.entries(stageTools)) {
+      const matched = allEntries.filter((entry) => tools.includes(entry.tool));
+      const latest = matched.at(-1);
+      const status = latest?.status ?? "pending";
+      liveActivityStages.append(h("div", {
+        class: `live-code-stage ${status}`,
+        title: latest?.detail ?? `${stage} has not started`,
+      },
+        h("i", { class: "live-code-stage-icon", "aria-hidden": "true", text: status === "done" ? "✓" : status === "failed" ? "!" : status === "running" ? "·" : "○" }),
+        h("span", { text: stage }),
+      ));
+    }
+    const active = [...allEntries].reverse().find((entry) => entry.status === "running");
+    const latestDone = [...allEntries].reverse().find((entry) => entry.tool === "Done");
+    liveActivityStatus.textContent = active
+      ? `${active.agentName} · ${active.tool}: ${active.detail}`
+      : latestDone
+      ? `${latestDone.agentName} finished this coding session.`
+      : `${entries[0].agentName} · latest coding activity`;
+    const editTools = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+    const visibleEntries = entries.filter((entry) => activityFilter === "all"
+      || (activityFilter === "edits" ? editTools.has(entry.tool) : !editTools.has(entry.tool)));
+    liveActivityTimeline.append(h("div", { class: "live-code-section-title", text: activityFilter === "edits" ? "File edits" : "Recent activity" }));
+    if (!visibleEntries.length) {
+      liveActivityTimeline.append(h("div", {
+        class: "live-code-empty",
+        text: activityFilter === "edits" ? "No file edits captured yet." : "No tool activity in this session yet.",
+      }));
+    }
+    visibleEntries.forEach((entry) => liveActivityTimeline.append(h("div", {
+      class: `live-code-event ${entry.status}`,
+      title: new Date(entry.at).toLocaleTimeString(),
+    },
+      h("span", { class: "live-code-event-status", "aria-hidden": "true", text: entry.status === "running" ? "◌" : entry.status === "failed" ? "!" : "✓" }),
+      h("strong", { text: entry.tool }),
+      h("span", { text: entry.detail }),
+    )));
+    changes.forEach((change) => {
+      const added = change.newText.split(/\r?\n/).length - (change.newText ? 0 : 1);
+      const removed = change.oldText.split(/\r?\n/).length - (change.oldText ? 0 : 1);
+      liveDiffList.append(h("details", { class: "live-diff-card" },
+        h("summary", {},
+          h("span", { class: "live-diff-file", text: change.path }),
+          h("span", { class: "live-diff-counts" },
+            h("i", { text: `+${Math.max(0, added)}` }),
+            h("b", { text: `−${Math.max(0, removed)}` }),
+          ),
+        ),
+        liveDiff(change),
+      ));
+    });
+  };
+  const projectProgress = h("div", {
+    class: "code-progress",
+    role: "status",
+    "aria-live": "polite",
+    hidden: true,
+  },
+    h("span", { class: "code-progress-orb", "aria-hidden": "true" }),
+    h("span", { class: "code-progress-label", text: "Preparing project context and requesting a proposal. The reviewed changes appear after the model responds." }),
+    h("div", { class: "code-progress-track", "aria-hidden": "true" }, h("i")),
+  );
+  const projectChanges = h("div", {
+    class: "code-changes",
+    role: "region",
+    "aria-label": "Generated code changes awaiting approval",
+  });
+  const projectSummary = h("pre", { class: "project-summary", hidden: true });
+  const editorSelect = document.createElement("select");
+  editorSelect.className = "tool-input editor-select";
+  for (const [value, label] of [
+    ["vscode", "VS Code"],
+    ["cursor", "Cursor"],
+    ["system", "Default file manager"],
+  ]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    editorSelect.append(option);
+  }
+  const editorStorageKey = "act3.projectEditor";
+  try {
+    const preferred = localStorage.getItem(editorStorageKey);
+    if (preferred && [...editorSelect.options].some((option) => option.value === preferred)) {
+      editorSelect.value = preferred;
+    }
+  } catch (error) {
+    console.error("[act3] could not load preferred editor", error);
+  }
+  editorSelect.addEventListener("change", () => {
+    try {
+      localStorage.setItem(editorStorageKey, editorSelect.value);
+    } catch (error) {
+      projectStatus.textContent = `Could not remember editor choice: ${String(error).replace(/^Error:\s*/, "")}`;
+    }
+  });
   const chooseProject = btn("Choose folder…", "secondary", async () => {
     try {
       const selected = await open({
@@ -923,27 +1208,61 @@ function buildTools(actions: ViewActions): ViewHost {
       projectStatus.textContent = `Could not choose project folder: ${String(error).replace(/^Error:\s*/, "")}`;
     }
   });
-  const openProject = btn("Open in VS Code", "secondary", async () => {
+  const openProject = btn("Open project", "secondary", async () => {
     const root = rootInput.value.trim();
     if (!root) {
       projectStatus.textContent = "Enter the project folder path first.";
       return;
     }
     try {
-      const opened = await Bridge.openInVSCode(root);
-      projectStatus.textContent = opened
-        ? "Project opened in VS Code."
-        : "VS Code's `code` command was not found. Install/enable the VS Code command-line launcher.";
+      await Bridge.openProjectInEditor(
+        root,
+        selectedProjectEditor(editorSelect),
+      );
+      projectStatus.textContent = `Project opened in ${editorSelect.selectedOptions[0]?.textContent ?? "editor"}.`;
     } catch (error) {
       projectStatus.textContent = String(error).replace(/^Error:\s*/, "");
-      if (currentProposal) {
-        autoApply.checked = false;
-        projectStatus.textContent += " Review the proposal before trying to apply it.";
-        renderCodeProposal(currentProposal);
-      }
+    }
+  }) as HTMLButtonElement;
+  const summarizeProject = btn("Summarize project", "secondary", async () => {
+    const root = rootInput.value.trim();
+    if (!root) {
+      projectStatus.textContent = "Choose a project folder first.";
+      return;
+    }
+    summarizeProject.disabled = true;
+    projectSummary.hidden = true;
+    projectStatus.textContent = "Inspecting a bounded set of project source files…";
+    try {
+      const summary = await Bridge.summarizeProject(root);
+      projectSummary.textContent = summary;
+      projectSummary.hidden = false;
+      projectStatus.textContent = "Project summary ready. No project files were changed.";
+    } catch (error) {
+      projectStatus.textContent = String(error).replace(/^Error:\s*/, "");
+    } finally {
+      summarizeProject.disabled = false;
+    }
+  }) as HTMLButtonElement;
+  const useProjectInAsk = btn("Ask about project", "secondary", () => {
+    const root = rootInput.value.trim();
+    if (!root) {
+      projectStatus.textContent = "Choose a project folder first.";
+      return;
+    }
+    document.dispatchEvent(new CustomEvent("act3:attach-project-context", { detail: { root } }));
+    actions.setView("prompt");
+  });
+  const copyProjectSummary = btn("Copy summary", "secondary", async () => {
+    if (projectSummary.hidden || !projectSummary.textContent) return;
+    try {
+      await Bridge.copyTextToClipboard(projectSummary.textContent);
+      projectStatus.textContent = "Project summary copied.";
+    } catch (error) {
+      projectStatus.textContent = String(error).replace(/^Error:\s*/, "");
     }
   });
-  const applyProposal = btn("Apply changes", "primary", async () => {
+  const applyProposal = btn("Accept & apply changes", "primary", async () => {
     const proposal = currentProposal;
     const root = currentProposalRoot;
     if (!proposal || !root) return;
@@ -953,25 +1272,47 @@ function buildTools(actions: ViewActions): ViewHost {
       currentProposal = null;
       currentProposalRoot = null;
       clear(projectChanges);
+      askView.dismissCodeReview?.();
       projectStatus.textContent = `Updated ${paths.length} file(s): ${paths.join(", ")}`;
+      Sound.play("finish");
       try {
-        const opened = await Bridge.openInVSCode(root);
-        if (!opened) projectStatus.textContent += " · VS Code's `code` command was not found.";
+        await Bridge.openProjectInEditor(
+          root,
+          selectedProjectEditor(editorSelect),
+        );
       } catch (error) {
-        projectStatus.textContent += ` · Could not open VS Code: ${String(error).replace(/^Error:\s*/, "")}`;
+        projectStatus.textContent += ` · Could not open editor: ${String(error).replace(/^Error:\s*/, "")}`;
       }
     } catch (error) {
       projectStatus.textContent = String(error).replace(/^Error:\s*/, "");
+      Sound.play("error");
     } finally {
       applyProposal.disabled = false;
     }
   }) as HTMLButtonElement;
+  const rejectProposal = btn("Reject changes", "secondary", () => {
+    if (!currentProposal) return;
+    currentProposal = null;
+    currentProposalRoot = null;
+    clear(projectChanges);
+    askView.dismissCodeReview?.();
+    projectStatus.textContent = "Proposal rejected. No project files were changed.";
+  });
   let currentProposal: CodeProposal | null = null;
   let currentProposalRoot: string | null = null;
   function renderCodeProposal(proposal: CodeProposal) {
     clear(projectChanges);
-    projectChanges.append(h("strong", { class: "tool-label", text: proposal.summary }));
-    for (const change of proposal.changes) {
+    projectChanges.append(
+      h("div", { class: "code-review-heading" },
+        h("span", { class: "code-review-icon", "aria-hidden": "true", text: "!" }),
+        h("div", {},
+          h("strong", { class: "tool-label", text: "Review required · no files changed yet" }),
+          h("div", { class: "tool-muted", text: proposal.summary }),
+        ),
+      ),
+      h("div", { class: "code-review-count", text: `${proposal.changes.length} file(s) proposed · inspect each diff before approving` }),
+    );
+    proposal.changes.forEach((change, index) => {
       const previous = change.originalContents ?? "(New file)";
       const details = h("details", { class: "code-change" },
         h("summary", { text: change.path }),
@@ -980,10 +1321,13 @@ function buildTools(actions: ViewActions): ViewHost {
           h("pre", { text: `After\n${change.contents}` }),
         ),
       );
+      details.style.setProperty("--change-index", String(index));
       projectChanges.append(details);
-    }
-    applyProposal.hidden = autoApply.checked;
-    if (!autoApply.checked) projectChanges.append(applyProposal);
+    });
+    projectChanges.append(
+      h("div", { class: "code-review-permission", text: "ACT 3 cannot write these edits until you explicitly approve them. Rejecting discards this proposal." }),
+      h("div", { class: "tool-actions code-review-actions" }, rejectProposal, applyProposal),
+    );
   }
   const generateCode = btn("Generate code", "primary", async () => {
     const root = rootInput.value.trim();
@@ -997,37 +1341,33 @@ function buildTools(actions: ViewActions): ViewHost {
     currentProposal = null;
     currentProposalRoot = null;
     clear(projectChanges);
-    projectStatus.textContent = "Reading project source and asking your selected model…";
+    askView.dismissCodeReview?.();
+    projectProgress.hidden = false;
+    projectStatus.textContent = "Working on a proposal. No files will be changed during generation.";
+    generateCode.textContent = "Generating…";
+    Sound.play("send");
     try {
       localStorage.setItem(workspaceKey, root);
       const proposal = await Bridge.generateCodeChanges(root, instructions);
       currentProposal = proposal;
       currentProposalRoot = root;
-      if (autoApply.checked) {
-        const paths = await Bridge.applyCodeChanges(root, proposal.changes);
-        currentProposal = null;
-        currentProposalRoot = null;
-        projectStatus.textContent = `Automatically updated ${paths.length} file(s): ${paths.join(", ")}`;
-        try {
-          const opened = await Bridge.openInVSCode(root);
-          if (!opened) projectStatus.textContent += " · VS Code's `code` command was not found.";
-        } catch (error) {
-          projectStatus.textContent += ` · Could not open VS Code: ${String(error).replace(/^Error:\s*/, "")}`;
-        }
-      } else {
-        projectStatus.textContent = "Review the generated files, then choose Apply changes.";
-        renderCodeProposal(proposal);
-      }
+      projectStatus.textContent = "Proposal ready. Review the diffs and choose Accept & apply changes or Reject changes.";
+      renderCodeProposal(proposal);
+      askView.showCodeReview?.(projectChanges, () => {
+        projectChangesSlot.append(projectChanges);
+        projectStatus.textContent = "Proposal ready in Ask → Code. Review it whenever you are ready.";
+      });
+      Sound.play("finish");
     } catch (error) {
       projectStatus.textContent = String(error).replace(/^Error:\s*/, "");
+      Sound.play("error");
     } finally {
+      projectProgress.hidden = true;
       generateCode.disabled = false;
+      generateCode.textContent = "Generate code";
       applyProposal.disabled = false;
     }
   }) as HTMLButtonElement;
-  autoApply.addEventListener("change", () => {
-    if (currentProposal) renderCodeProposal(currentProposal);
-  });
   rootInput.addEventListener("change", () => {
     try {
       localStorage.setItem(workspaceKey, rootInput.value.trim());
@@ -1035,7 +1375,8 @@ function buildTools(actions: ViewActions): ViewHost {
         currentProposal = null;
         currentProposalRoot = null;
         clear(projectChanges);
-        projectStatus.textContent = "Project folder changed. Generate a fresh proposal for this folder.";
+        askView.dismissCodeReview?.();
+        projectStatus.textContent = "Project folder changed. The pending proposal was discarded; generate a fresh proposal for this folder.";
       }
     } catch (error) {
       projectStatus.textContent = `Could not remember project folder: ${String(error).replace(/^Error:\s*/, "")}`;
@@ -1072,9 +1413,276 @@ function buildTools(actions: ViewActions): ViewHost {
       createConfirm.checked = false;
     } catch (error) { fileStatus.textContent = String(error).replace(/^Error:\s*/, ""); }
   });
+  const mcpStatus = h("div", {
+    class: "tool-muted",
+    text: "Add trusted local MCP servers in Settings to discover app tools.",
+  });
+  const mcpServerSelect = document.createElement("select");
+  mcpServerSelect.className = "tool-input";
+  const mcpToolList = h("div", { class: "mcp-tool-list" });
+  const mcpReview = h("div", { class: "mcp-review", hidden: true });
+  const mcpArguments = h("textarea", {
+    class: "tool-textarea",
+    placeholder: "Tool arguments as JSON",
+    value: "{}",
+  }) as HTMLTextAreaElement;
+  const mcpResult = h("pre", { class: "mcp-result", hidden: true });
+  let selectedMcpTool: McpTool | null = null;
+  let currentMcpTools: McpTool[] = [];
+  const refreshMcpTools = async () => {
+    const serverId = mcpServerSelect.value;
+    if (!serverId) {
+      mcpStatus.textContent = "Add and enable a local MCP server in Settings.";
+      clear(mcpToolList);
+      return;
+    }
+    mcpStatus.textContent = "Connecting to the configured MCP server…";
+    clear(mcpToolList);
+    mcpResult.hidden = true;
+    mcpReview.hidden = true;
+    try {
+      currentMcpTools = await Bridge.mcpListTools(serverId);
+      if (mcpServerSelect.value !== serverId) return;
+      mcpStatus.textContent = `${currentMcpTools.length} tool(s) discovered. Choose a tool to review its arguments.`;
+      for (const tool of currentMcpTools) {
+        mcpToolList.append(h("button", {
+          class: "mcp-tool-item",
+          type: "button",
+          text: `${tool.serverName} · ${tool.name}`,
+          onclick: () => {
+            selectedMcpTool = tool;
+            mcpArguments.value = "{}";
+            mcpResult.hidden = true;
+            mcpReview.hidden = false;
+            clear(mcpReview);
+            mcpReview.append(
+              h("strong", { text: `${tool.serverName} → ${tool.name}` }),
+              h("div", { class: "tool-muted", text: tool.description || "No description provided by server." }),
+              h("pre", { class: "mcp-schema", text: JSON.stringify(tool.inputSchema, null, 2) }),
+            );
+          },
+        }));
+      }
+    } catch (error) {
+      mcpStatus.textContent = `Could not connect: ${String(error).replace(/^Error:\s*/, "")}`;
+    }
+  };
+  const mcpRefreshButton = btn("Discover tools", "secondary", () => void refreshMcpTools());
+  mcpServerSelect.addEventListener("change", () => {
+    selectedMcpTool = null;
+    void refreshMcpTools();
+  });
+  const mcpRunButton = btn("Review tool call", "secondary", () => {
+    if (!selectedMcpTool) {
+      mcpStatus.textContent = "Select a tool first.";
+      return;
+    }
+    try {
+      JSON.parse(mcpArguments.value);
+    } catch {
+      mcpStatus.textContent = "Arguments must be valid JSON.";
+      return;
+    }
+    mcpReview.hidden = false;
+    clear(mcpReview);
+    mcpReview.append(
+      h("div", { class: "hook-request-heading", text: "Review before running" }),
+      h("div", { class: "tool-muted", text: `Server: ${selectedMcpTool.serverName} · Tool: ${selectedMcpTool.name}` }),
+      h("pre", { class: "mcp-schema", text: mcpArguments.value }),
+      h("div", { class: "tool-actions" },
+        btn("Deny", "secondary", () => {
+          mcpReview.hidden = true;
+          mcpStatus.textContent = "Tool call denied; the MCP server was not invoked.";
+        }),
+        (() => {
+          const allow = h("button", {
+            class: "btn primary",
+            text: "Allow once",
+            onclick: async () => {
+          allow.disabled = true;
+          mcpStatus.textContent = "Running the approved tool…";
+          try {
+            const output = await Bridge.mcpCallTool(
+              selectedMcpTool!.serverId,
+              selectedMcpTool!.name,
+              JSON.parse(mcpArguments.value),
+              true,
+            );
+            mcpResult.textContent = output;
+            mcpResult.hidden = false;
+            mcpStatus.textContent = "Tool completed.";
+            mcpReview.hidden = true;
+          } catch (error) {
+            mcpStatus.textContent = `Tool failed: ${String(error).replace(/^Error:\s*/, "")}`;
+            allow.disabled = false;
+          }
+            },
+          }) as HTMLButtonElement;
+          return allow;
+        })(),
+      ),
+    );
+  });
+  const syncMcpServers = () => {
+    const current = mcpServerSelect.value;
+    const configured = State.settings.mcpServers ?? [];
+    const ids = configured.map((server) => `${server.id}:${server.enabled}`).join("|");
+    if (mcpServerSelect.dataset.ids === ids) return;
+    mcpServerSelect.replaceChildren();
+    configured.filter((server) => server.enabled).forEach((server) => {
+      mcpServerSelect.append(h("option", { value: server.id, text: server.name }));
+    });
+    mcpServerSelect.value = configured.some((server) => server.id === current && server.enabled)
+      ? current
+      : configured.find((server) => server.enabled)?.id ?? "";
+    mcpServerSelect.dataset.ids = ids;
+  };
+  syncMcpServers();
+  const mcpSection = h("div", { class: "tool-section mcp-tools" },
+    h("div", { class: "tool-title", text: "Connected app tools (MCP)" }),
+    h("div", { class: "tool-muted", text: "Only trusted servers configured in Settings are started. Each tool call requires your explicit approval." }),
+    h("div", { class: "tool-row" }, mcpServerSelect, mcpRefreshButton),
+    mcpToolList,
+    mcpArguments,
+    h("div", { class: "tool-row" }, mcpRunButton),
+    mcpReview,
+    mcpResult,
+    mcpStatus,
+  );
+  const desktopStatus = h("div", { class: "tool-muted", "aria-live": "polite" });
+  const desktopInstruction = h("input", {
+    class: "tool-input",
+    type: "text",
+    maxlength: "1000",
+    placeholder: "Describe one action in the shared app…",
+  }) as HTMLInputElement;
+  const desktopScreenshot = h("img", {
+    class: "desktop-screenshot",
+    alt: "Screenshot ACT 3 will use for a proposed desktop action",
+    hidden: true,
+  }) as HTMLImageElement;
+  const desktopReview = h("div", { class: "desktop-action-review", hidden: true });
+  const desktopRequest = btn("Propose one action", "secondary", async () => {
+    const capture = State.attachedWindowCapture;
+    const instruction = desktopInstruction.value.trim();
+    if (!capture) {
+      desktopStatus.textContent = "Share an app screenshot in Ask first.";
+      return;
+    }
+    if (!instruction) {
+      desktopStatus.textContent = "Describe what you want ACT 3 to do in the shared app.";
+      desktopInstruction.focus();
+      return;
+    }
+    desktopRequest.disabled = true;
+    State.pendingDesktopAction = null;
+    desktopReview.hidden = true;
+    State.notify();
+    desktopStatus.textContent = `Sending the screenshot and request to ${State.chatAgent}. Cloud bots send them to their configured provider.`;
+    try {
+      const proposal = await Bridge.proposeWindowAction(instruction, capture, State.chatAgent);
+      State.attachedWindowCapture = proposal.capture;
+      if (!proposal.action) {
+        desktopStatus.textContent = proposal.summary;
+        State.notify();
+        return;
+      }
+      State.pendingDesktopAction = {
+        windowId: proposal.capture.windowId,
+        appName: proposal.capture.appName,
+        title: proposal.capture.title,
+        width: proposal.capture.width,
+        height: proposal.capture.height,
+        summary: proposal.summary,
+        action: proposal.action,
+      };
+      desktopStatus.textContent = "Review the exact action below. Nothing runs until you choose Allow once.";
+      State.notify();
+    } catch (error) {
+      desktopStatus.textContent = `Could not propose an action: ${String(error).replace(/^Error:\s*/, "")}`;
+    } finally {
+      desktopRequest.disabled = false;
+    }
+  }) as HTMLButtonElement;
+  const windowActionLabel = (action: WindowAction) => {
+    switch (action.kind) {
+      case "click": return `Click at ${action.x}, ${action.y}`;
+      case "type": return `Type: ${action.text}`;
+      case "hotkey": return `Press ${action.keys.join(" + ")}`;
+    }
+  };
+  const renderDesktopReview = () => {
+    const pending = State.pendingDesktopAction;
+    if (!pending) {
+      desktopReview.hidden = true;
+      clear(desktopReview);
+      return;
+    }
+    desktopReview.hidden = false;
+    clear(desktopReview);
+    desktopReview.append(
+      h("div", { class: "hook-request-heading", text: "One desktop action needs approval" }),
+      h("div", { class: "tool-muted", text: `${pending.appName} · ${pending.title}` }),
+      h("div", { class: "desktop-action-summary", text: pending.summary }),
+      h("pre", { class: "mcp-schema", text: windowActionLabel(pending.action) }),
+      h("div", { class: "tool-muted", text: "Only this single click, printable text entry, or navigation key will run. Review the target and exact text." }),
+      h("div", { class: "tool-actions" },
+        btn("Deny", "secondary", () => {
+          State.pendingDesktopAction = null;
+          desktopStatus.textContent = "Desktop action denied; nothing was sent.";
+          State.notify();
+        }),
+        (() => {
+          const allow = h("button", {
+            class: "btn primary",
+            type: "button",
+            text: "Allow once",
+            onclick: async () => {
+              allow.disabled = true;
+              desktopStatus.textContent = "Checking the selected window and running the approved action…";
+              try {
+                await Bridge.performWindowAction(
+                  pending.windowId,
+                  pending.appName,
+                  pending.title,
+                  pending.width,
+                  pending.height,
+                  pending.action,
+                  true,
+                );
+                State.pendingDesktopAction = null;
+                desktopStatus.textContent = "The approved action completed.";
+                State.notify();
+              } catch (error) {
+                desktopStatus.textContent = `Action did not run: ${String(error).replace(/^Error:\s*/, "")}`;
+                allow.disabled = false;
+              }
+            },
+          }) as HTMLButtonElement;
+          return allow;
+        })(),
+      ),
+    );
+  };
+  const desktopSection = h("div", { class: "tool-section desktop-control" },
+    h("div", { class: "tool-title", text: "Help with a shared app" }),
+    h("div", {
+      class: "tool-muted",
+      text: "Capture a window in Ask, then request one safe action. The selected AI receives the screenshot; cloud bots send it to their configured endpoint. Review and allow each action here.",
+    }),
+    desktopScreenshot,
+    h("div", { class: "tool-row" }, desktopInstruction, desktopRequest),
+    desktopReview,
+    desktopStatus,
+  );
+  let renderedDesktopCapture: typeof State.attachedWindowCapture = null;
+
+  const projectChangesSlot = h("div", { class: "code-review-slot" }, projectChanges);
   const el = h("div", { class: "view tools-view" },
     card("indigo", h("div", { class: "tool-grid" },
       requestSection,
+      mcpApprovalSection,
+      liveActivityPanel,
       h("div", { class: "tool-section task-runner" },
         h("div", { class: "tool-title", text: "Quick actions" }),
         h("div", { class: "tool-row quick-task-row" }, taskInput, runTask),
@@ -1091,16 +1699,24 @@ function buildTools(actions: ViewActions): ViewHost {
       ),
       h("div", { class: "tool-section" }, h("div", { class: "tool-title", text: "Search" }), h("div", { class: "tool-row" }, search, youtube, web)),
       h("div", { class: "tool-section" }, writing),
+      mcpSection,
+      desktopSection,
       h("div", { class: "tool-section timer-section" }, timerLabel, timerStatus, timerButtons),
       h("div", { class: "tool-section" }, h("div", { class: "tool-title", text: "Reminders" }), h("div", { class: "tool-row" }, alarmInput, addAlarm), alarmList),
       h("div", { class: "tool-section code-agent" },
         h("div", { class: "tool-title", text: "Code with ACT 3" }),
         h("div", { class: "tool-muted", text: "Describe a code change; ACT 3 reads a bounded set of source files, generates edits, and can apply them in this project. It never runs commands." }),
-        h("div", { class: "tool-row project-path-row" }, rootInput, chooseProject, openProject),
+        h("div", { class: "tool-row project-path-row" }, rootInput, chooseProject, editorSelect, openProject),
+        h("div", { class: "tool-row project-actions" }, summarizeProject, useProjectInAsk, copyProjectSummary),
+        projectSummary,
         projectPrompt,
-        h("div", { class: "tool-row code-agent-actions" }, autoApply, h("span", { class: "tool-muted", text: "Automatically apply generated edits without review" }), generateCode),
+        projectProgress,
+        h("div", { class: "tool-row code-agent-actions" },
+          h("span", { class: "tool-muted", text: "Every generated edit waits for your review and approval." }),
+          generateCode,
+        ),
         projectStatus,
-        projectChanges,
+        projectChangesSlot,
       ),
       h("div", { class: "tool-section file-tools" },
         h("div", { class: "tool-title", text: "File tools" }),
@@ -1117,6 +1733,23 @@ function buildTools(actions: ViewActions): ViewHost {
     el,
     sync() {
       renderPendingRequest();
+      renderMcpApprovals();
+      renderLiveActivity();
+      syncMcpServers();
+      const capture = State.attachedWindowCapture;
+      if (capture) {
+        if (capture !== renderedDesktopCapture) {
+          renderedDesktopCapture = capture;
+          desktopScreenshot.src = `data:image/png;base64,${capture.pngBase64}`;
+        }
+        desktopScreenshot.alt = `Current screenshot of ${capture.appName}: ${capture.title}`;
+        desktopScreenshot.hidden = false;
+      } else {
+        renderedDesktopCapture = null;
+        desktopScreenshot.hidden = true;
+        desktopScreenshot.removeAttribute("src");
+      }
+      renderDesktopReview();
       const nowMs = performance.now();
       if (timerRunning && timerSeconds > 0) {
         const elapsed = Math.floor((nowMs - lastTimerTick) / 1000);
@@ -1170,44 +1803,29 @@ export function buildViews(
   map.set("note", buildNote());
   map.set("settings", buildSettings(actions));
   const prompt = buildPrompt(onChatHeightChange);
-  map.set("upload", buildUpload(actions));
+  map.set("upload", buildUpload());
   map.set("uploading", buildUploading());
   map.set("choose", buildChoose(actions));
   // Not in the Windows v1: sending a file by email, window attach + web result.
   map.set("mail", buildPlaceholder("Sending by email isn't in this version.", ""));
   map.set("searching", buildPlaceholder("ACT 3 is searching…", ""));
   map.set("result", buildPlaceholder("Result", ""));
-  const tools = buildTools(actions);
+  const tools = buildTools(actions, prompt);
   const toolGrid = tools.el.querySelector(".tool-grid");
   if (toolGrid) {
-    const taskPanel = h("div", { class: "ask-inline-panel", "data-ask-panel": "tasks" });
     const codePanel = h("div", { class: "ask-inline-panel", "data-ask-panel": "code" });
-    const morePanel = h("div", { class: "ask-inline-panel", "data-ask-panel": "more" });
     for (const child of Array.from(toolGrid.children)) {
       if (child.classList.contains("hook-request")) continue;
-      if (child.classList.contains("task-runner") || child.classList.contains("task-maker")) {
-        taskPanel.append(child);
-      } else if (child.classList.contains("code-agent")) {
+      if (child.classList.contains("code-agent") || child.classList.contains("live-code-panel")) {
         codePanel.append(child);
-      } else {
-        morePanel.append(child);
       }
-    }
-    if (!taskPanel.childElementCount) {
-      taskPanel.append(h("div", { class: "tool-muted", text: "Task tools are unavailable." }));
     }
     if (!codePanel.childElementCount) {
       codePanel.append(h("div", { class: "tool-muted", text: "Code tools are unavailable." }));
     }
     prompt.attachAskPanels?.([
-      { id: "tasks", label: "Tasks", element: taskPanel },
       { id: "code", label: "Code", element: codePanel },
-      { id: "more", label: "More", element: morePanel },
     ], () => tools.sync(), (nowMs) => tools.tick?.(nowMs));
-    toolGrid.append(h("div", {
-      class: "tool-muted tools-moved-hint",
-      text: "Tasks and Code are now available as tabs in Ask.",
-    }));
   }
   map.set("prompt", prompt);
   map.set("tools", tools);

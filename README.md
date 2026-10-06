@@ -47,7 +47,7 @@ ACT 3 opens the matching GitHub Release so you can download and run the installe
 | Click the small island | It opens |
 | Click Mochi | It gets annoyed. Three times in a row and it goes dizzy |
 | Rest the pointer on Mochi for two seconds | Hearts |
-| Drop files or folders, or use **Drop → Choose files/folder…** | Works from any folder; Mochi privately copies supported documents and can answer questions across them |
+| Drop files or folders onto ACT 3 | Works from any folder; Mochi privately copies supported documents and can answer questions across them |
 | `Esc` | Closes the island |
 | Tray icon | Open, Settings…, Pause, Quit |
 
@@ -72,14 +72,42 @@ not modified; text edits are limited to 1 MB files.
 
 In **Ask → Code**, enter a project folder and describe the change.
 ACT 3 sends at most 40 source files (200 KB total) to your selected model,
-displays the generated files for review, and applies changes only when you click
-**Apply changes**. You can opt into automatic application, which skips that
-review step. ACT 3 confines edits to supported source files under the selected
-project and never runs generated commands or code. If files change while a
-proposal is being reviewed, applying is refused and you can generate a fresh
-proposal. Use **Open in VS Code** to open the same project in VS Code; its
+shows an animated progress indicator while the model prepares a proposal, then
+displays the generated diffs for review. No files are changed unless you choose
+**Accept & apply changes** in the animated Ask review popup; **Reject changes**
+discards the proposal. Tasks and file utilities are available in **Tools**,
+leaving Ask with just Chat and Code. ACT 3
+confines edits to supported source files under the selected project and never
+runs generated commands or code. If files change while a proposal is being
+reviewed, applying is refused and you can generate a fresh proposal. Use
+**Open in VS Code** to open the same project in VS Code; its
 `code` command must be available on PATH. Online providers receive the selected
 source context; use Ollama for local-only model inference.
+
+The **Ask → Code** tab also shows live Claude Code Read/Edit/Bash/Done activity
+when the Claude Code integration is installed. Completed Edit, Write, and
+MultiEdit hook events display a bounded, color-coded inline diff preview. These
+are edits already performed by Claude Code; ACT 3 shows them for visibility.
+
+Use **Summarize project** for an AI-generated overview, or **Ask about project**
+to attach the bounded source snapshot to an Ask conversation. In Ask, **Attach
+previous app/window** adds only the app name and window title captured before
+ACT 3 takes focus. **Share app screenshot** is a separate, explicit choice; it
+captures the previous app window and attaches a visible preview. The screenshot
+is sent only when you send a chat message or request a desktop action. Online
+bots send it to their configured provider; Ollama sends it to its configured
+endpoint, which may be remote.
+
+In **Tools**, add trusted local stdio MCP servers in Settings to discover app
+tools. Each model-requested or manually composed tool call requires a separate
+**Allow once** approval. The desktop-action tool is currently Windows-only:
+describe one action for a shared screenshot, inspect the refreshed screenshot
+and exact proposed action, then approve it in Tools. ACT 3 allows one bounded
+click, printable text entry, or navigation key per approval; password-field
+typing and actions on a changed window are refused. It does not run actions
+automatically. Use **Detach context** to remove an app or project attachment.
+The project summary and project-aware chat send source files to the currently
+selected model, so choose Ollama only when its configured endpoint is local.
 
 ACT 3 is a Windows desktop app built with Tauri. Its interface is rendered by
 the system WebView2 engine, so Task Manager may show WebView2 processes for the
@@ -119,12 +147,11 @@ Anthropic chat support has been removed. Claude Code hooks remain a separate
 integration and can be left disabled if you do not use Claude Code.
 
 Drop up to 20 PDFs or UTF-8 text files at once—from any directory—to ask
-questions across them together. You can also use **Drop → Choose files…** or
-**Choose folder…** when dragging from Explorer is inconvenient. Folder imports
-collect PDFs and common text/code files through eight levels, skip symlinks and
-build/dependency folders, and stop at 20 files or 10,000 directory entries.
+questions across them together. Folder drops collect PDFs and common text/code
+files through eight levels, skip symlinks and build/dependency folders, and stop
+at 20 files or 10,000 directory entries.
 ACT 3 makes private inbox copies, so originals are untouched and their location
-does not matter. Each file is limited to 10 MB; a batch is limited to 50 MB
+does not matter. Each file is limited to 30 MB; a batch is limited to 50 MB
 total and combined extracted context to 200,000 characters. The documents stay
 attached for follow-up questions in the same chat. Scanned/image-only PDFs and
 binary office documents are not supported yet.

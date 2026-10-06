@@ -8,6 +8,7 @@ import { Island } from "./island/island";
 import { registerHookHandlers } from "./island/hooks";
 import { registerIntegrationHandlers, refreshConfigured } from "./island/integrations";
 import { FriendMode } from "./core/friend-mode";
+import type { PendingMcpApproval } from "./core/state";
 
 async function main() {
   const root = document.getElementById("root");
@@ -59,6 +60,11 @@ async function main() {
   });
 
   await onEvent<null>("screen-changed", () => void Bridge.reposition());
+  await onEvent<PendingMcpApproval>("mcp-approval", (request) => {
+    State.pendingMcpApprovals.push(request);
+    State.notify();
+    island.alert("tools");
+  });
 
   // The settings window writes preferences; apply them here without a restart.
   await onEvent<Settings>("settings-changed", (s) => {

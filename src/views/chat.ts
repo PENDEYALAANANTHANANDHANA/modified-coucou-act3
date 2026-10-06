@@ -12,11 +12,12 @@ import { createMiniBot } from "../mochi/minibots";
 
 let nextId = 1;
 
-function bubble(message: ChatMessage, agent: ChatAgentId): HTMLElement {
+function bubble(message: ChatMessage, agent: ChatAgentId, animate = false): HTMLElement {
+  const entrance = animate ? " message-enter" : "";
   if (message.role === "user") {
     return h(
       "div",
-      { class: "chat-row user" },
+      { class: `chat-row user${entrance}` },
       h("div", { class: "bubble", text: message.content }),
     );
   }
@@ -24,17 +25,27 @@ function bubble(message: ChatMessage, agent: ChatAgentId): HTMLElement {
   appendMarkdown(reply, message.content);
   return h(
     "div",
-    { class: "chat-row assistant", style: `--agent-color:${CHAT_AGENTS[agent].color}` },
+    { class: `chat-row assistant${entrance}`, style: `--agent-color:${CHAT_AGENTS[agent].color}` },
     h("i", { class: "chat-reply-dot", title: CHAT_AGENTS[agent].name }),
     reply,
   );
 }
 
-function typingDots(): HTMLElement {
+function typingDots(agent: ChatAgentId): HTMLElement {
+  const name = CHAT_AGENTS[agent].name;
   return h(
     "div",
-    { class: "chat-row" },
-    h("div", { class: "typing" }, h("i"), h("i"), h("i")),
+    {
+      class: "chat-row typing-row message-enter",
+      style: `--agent-color:${CHAT_AGENTS[agent].color}`,
+      role: "status",
+      "aria-label": `${name} is writing`,
+    },
+    h("i", { class: "chat-reply-dot", "aria-hidden": "true" }),
+    h("div", { class: "typing-indicator" },
+      h("span", { class: "typing-label", text: `${name} is writing` }),
+      h("div", { class: "typing", "aria-hidden": "true" }, h("i"), h("i"), h("i")),
+    ),
   );
 }
 
@@ -116,6 +127,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   const selectedAgents: ChatAgentId[] = [State.chatAgent];
   let pickerOpen = false;
   let sending = false;
+  const replyingAgents = new Set<ChatAgentId>();
   let agentSelectionChanged = false;
   const agentTrigger = h("button", {
     class: "chat-agent-trigger",
@@ -264,6 +276,81 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   agentPicker.append(agentTrigger, agentOptions);
   syncAgentOptions();
   const chipRow = h("div", { class: "chip-row" });
+  const attachWindowStatus = h("span", { class: "chat-attach-status", "aria-live": "polite" });
+  const attachWindow = h("button", {
+    class: "chat-attach-window",
+    type: "button",
+    text: "Attach previous app/window",
+    title: "Attach only the app and window title. ACT 3 does not read website contents.",
+    onclick: () => {
+      if (State.attachedWindowContext || State.projectRootContext) {
+        State.attachedWindowContext = null;
+        State.attachedWindowCapture = null;
+        State.projectRootContext = null;
+        attachWindowStatus.textContent = "Attached context detached.";
+        State.notify();
+        onHeightChange();
+        return;
+      }
+      const context = State.previousWindowContext;
+      if (!context) {
+        attachWindowStatus.textContent = "No previous app window was captured. Open Ask from that app and try again.";
+        return;
+      }
+      State.attachedWindowContext = context;
+      State.attachedWindowCapture = null;
+      State.projectRootContext = null;
+      attachWindowStatus.textContent = `Attached ${context.appName}: ${context.title}`;
+      State.notify();
+      onHeightChange();
+    },
+  });
+  document.addEventListener("act3:attach-project-context", (event) => {
+    const root = (event as CustomEvent<{ root?: string }>).detail?.root?.trim();
+    if (!root) return;
+    State.projectRootContext = root;
+    State.attachedWindowContext = null;
+    State.attachedWindowCapture = null;
+    attachWindowStatus.textContent = `Attached project: ${root}`;
+    selectAskTab("chat");
+    State.notify();
+    onHeightChange();
+  });
+  const captureWindow = h("button", {
+    class: "chat-attach-window",
+    type: "button",
+    text: "Share app screenshot",
+    title: "Capture the previously active app window and attach its screenshot to this chat.",
+    onclick: async () => {
+      if (State.attachedWindowCapture) {
+        State.attachedWindowCapture = null;
+        attachWindowStatus.textContent = "Screenshot sharing stopped.";
+        State.notify();
+        onHeightChange();
+        return;
+      }
+      const context = State.previousWindowContext;
+      if (!context) {
+        attachWindowStatus.textContent = "No previous app window was captured. Open Ask from that app and try again.";
+        return;
+      }
+      attachWindowStatus.textContent = "Capturing the selected app window…";
+      try {
+        const capture = await Bridge.captureWindow(context.windowId);
+        State.attachedWindowContext = context;
+        State.attachedWindowCapture = capture;
+        State.projectRootContext = null;
+        attachWindowStatus.textContent = `Screenshot shared with selected bots · ${capture.width} × ${capture.height}`;
+        State.notify();
+        onHeightChange();
+      } catch (error) {
+        attachWindowStatus.textContent = `Could not capture window: ${String(error).replace(/^Error:\s*/, "")}`;
+      }
+    },
+  });
+  const windowPreview = h("div", { class: "chat-window-preview", hidden: true });
+  const attachWindowRow = h("div", { class: "chat-attach-row" },
+    attachWindow, captureWindow, attachWindowStatus, windowPreview);
   const log = h("div", { class: "chat-log" });
   const input = h("input", {
     type: "text",
@@ -274,13 +361,59 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   const send = h("button", { class: "send-btn", title: "Send" }, svg(ICONS.arrowUp, 11));
   const bar = h("div", { class: "chat-bar" }, input, send);
 
-  chatPanel.append(agentPicker, chipRow, log, bar);
+  chatPanel.append(agentPicker, attachWindowRow, chipRow, log, bar);
   const el = h(
     "div",
     { class: "view" },
     h("div", { class: "card wash chat-card" },
       h("div", { class: "chat-body" }, askTabs, chatPanel)),
   );
+  const reviewContents = h("div", { class: "code-review-popup-content" });
+  const reviewDialog = h("section", {
+    class: "code-review-popup",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-labelledby": "code-review-popup-title",
+  },
+    h("header", { class: "code-review-popup-header" },
+      h("div", {},
+        h("span", { class: "code-review-popup-eyebrow", text: "APPROVAL REQUIRED" }),
+        h("h2", { id: "code-review-popup-title", text: "Review code changes" }),
+      ),
+      h("button", {
+        class: "code-review-popup-close",
+        type: "button",
+        text: "Review later",
+        onclick: () => dismissCodeReview(),
+      }),
+    ),
+    reviewContents,
+  );
+  const reviewOverlay = h("div", {
+    class: "code-review-overlay",
+    hidden: true,
+    onclick: (event: Event) => {
+      if (event.target === reviewOverlay) dismissCodeReview();
+    },
+  }, reviewDialog);
+  el.append(reviewOverlay);
+  let reviewOnDismiss: (() => void) | null = null;
+  function dismissCodeReview() {
+    if (reviewOverlay.hidden) return;
+    reviewOverlay.hidden = true;
+    reviewOverlay.classList.remove("visible");
+    reviewOnDismiss?.();
+    reviewOnDismiss = null;
+    clear(reviewContents);
+    onHeightChange();
+    input.focus();
+  }
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !reviewOverlay.hidden) {
+      event.preventDefault();
+      dismissCodeReview();
+    }
+  });
   for (const [id, panel] of askPanels) {
     panel.hidden = id !== "chat";
   }
@@ -288,6 +421,8 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   card.style.setProperty("--wash", "rgba(167,139,250,0.38)");
 
   let renderedKey = "";
+  let renderedMessageIds = new Set<number>();
+  let renderedWindowCapture: typeof State.attachedWindowCapture = null;
   let appliedPrefill = false;
 
   async function submit() {
@@ -324,6 +459,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
       /\b(?:in|into)\s+(?:that|this|the)\s+(?:notepad|file|document|note)\b/i.test(query),
     );
     const targets = isWritingActiveFile ? [State.chatAgent] : [...selectedAgents];
+    targets.forEach((agent) => replyingAgents.add(agent));
     Sound.play("send");
 
     const userMessage = { id: nextId++, role: "user" as const, content: query };
@@ -335,7 +471,17 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     const files = State.droppedFiles;
     const file = State.droppedFile;
     const writeToActiveFile = isWritingActiveFile;
-    const context: ChatContext | null = files.length > 1
+    const context: ChatContext | null = State.projectRootContext
+      ? { kind: "project", root: State.projectRootContext }
+      : State.attachedWindowContext
+      ? {
+        kind: "window",
+        ...State.attachedWindowContext,
+        ...(State.attachedWindowCapture
+          ? { screenshotBase64: State.attachedWindowCapture.pngBase64 }
+          : {}),
+      }
+      : files.length > 1
       ? { kind: "files", files }
       : file
       ? { kind: "file", name: file.name, path: file.path, ...(writeToActiveFile && active ? { writePath: active.path } : {}) }
@@ -360,6 +506,10 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
             role: "assistant",
             content: `Could not reach ${CHAT_AGENTS[agent].name}: ${String(err).replace(/^Error:\s*/, "")}`,
           });
+        } finally {
+          replyingAgents.delete(agent);
+          State.notify();
+          onHeightChange();
         }
       }));
       State.stateOverride = null;
@@ -370,6 +520,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
       State.view = "note";
       Sound.play("error");
     } finally {
+      replyingAgents.clear();
       sending = false;
       State.notify();
       onHeightChange();
@@ -378,6 +529,9 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   }
 
   send.addEventListener("click", () => void submit());
+  input.addEventListener("input", () => {
+    send.disabled = sending || !input.value.trim();
+  });
   input.addEventListener("keydown", (e) => {
     if ((e as KeyboardEvent).key === "Enter") {
       e.preventDefault();
@@ -388,6 +542,20 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
 
   return {
     el,
+    showCodeReview(content, onDismiss) {
+      clear(reviewContents);
+      reviewContents.append(content);
+      reviewOnDismiss = onDismiss;
+      reviewOverlay.hidden = false;
+      requestAnimationFrame(() => {
+        reviewOverlay.classList.add("visible");
+        reviewContents.querySelector<HTMLButtonElement>("button")?.focus();
+      });
+      onHeightChange();
+    },
+    dismissCodeReview() {
+      dismissCodeReview();
+    },
     attachAskPanels(panels, sync, tick) {
       syncAskPanel = sync;
       tickAskPanel = tick;
@@ -411,14 +579,49 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
           : State.chatAgent === "openrouter" ? "rgba(251,146,60,0.34)"
             : "rgba(52,211,153,0.32)",
       );
+      bar.style.setProperty("--agent-color", CHAT_AGENTS[State.chatAgent].color);
       const file = State.droppedFile;
-      const wantChip = State.droppedFiles.length > 1
+      const wantChip = State.projectRootContext
+        ? `Project · ${State.projectRootContext.split(/[\\/]/).filter(Boolean).pop() ?? State.projectRootContext}`
+        : State.attachedWindowContext
+        ? `${State.attachedWindowContext.appName} · ${State.attachedWindowContext.title}`
+        : State.droppedFiles.length > 1
         ? `${State.droppedFiles.length} documents`
         : State.activeDocument?.name ?? file?.name ?? "";
       if (chipRow.dataset.label !== wantChip) {
         chipRow.dataset.label = wantChip;
         clear(chipRow);
         if (wantChip) chipRow.append(contextChip(wantChip));
+      }
+      attachWindow.textContent = State.attachedWindowContext || State.projectRootContext
+        ? "Detach context"
+        : "Attach previous app/window";
+      captureWindow.textContent = State.attachedWindowCapture
+        ? "Stop sharing screenshot"
+        : "Share app screenshot";
+      captureWindow.disabled = !State.attachedWindowCapture && !State.previousWindowContext;
+      if (State.attachedWindowCapture) {
+        if (State.attachedWindowCapture !== renderedWindowCapture) {
+          renderedWindowCapture = State.attachedWindowCapture;
+          const image = h("img", {
+            class: "chat-window-preview-image",
+            src: `data:image/png;base64,${State.attachedWindowCapture.pngBase64}`,
+            alt: `Screenshot of ${State.attachedWindowCapture.appName}: ${State.attachedWindowCapture.title}`,
+          }) as HTMLImageElement;
+          clear(windowPreview);
+          windowPreview.append(
+            image,
+            h("span", {
+              class: "chat-window-preview-note",
+              text: "The screenshot is shared when you send a message or request an app action. Cloud bots send it to their configured provider.",
+            }),
+          );
+        }
+        windowPreview.hidden = false;
+      } else {
+        renderedWindowCapture = null;
+        windowPreview.hidden = true;
+        clear(windowPreview);
       }
 
       const thinking = State.stateOverride === "thinking";
@@ -432,12 +635,16 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
         seenUserMessages.add(message.id);
         return true;
       });
-      const key = `${selectedAgents.join(",")}:${distinctMessages.map(({ agent, message }) => `${agent}:${message.id}`).join(",")}:${thinking}`;
+      const pendingAgents = [...replyingAgents].filter((agent) => selectedAgents.includes(agent));
+      const key = `${selectedAgents.join(",")}:${distinctMessages.map(({ agent, message }) => `${agent}:${message.id}`).join(",")}:${pendingAgents.join(",")}:${thinking}`;
       if (key !== renderedKey) {
         renderedKey = key;
         clear(log);
-        for (const { agent, message } of distinctMessages) log.append(bubble(message, agent));
-        if (thinking) log.append(typingDots());
+        distinctMessages.forEach(({ agent, message }) => {
+          log.append(bubble(message, agent, !renderedMessageIds.has(message.id)));
+        });
+        renderedMessageIds = new Set(distinctMessages.map(({ message }) => message.id));
+        pendingAgents.forEach((agent) => log.append(typingDots(agent)));
         log.scrollTop = log.scrollHeight;
       }
 
@@ -447,6 +654,10 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
           ? "Ask about it, or say “write in this file…”"
           : "Continue…";
       input.disabled = sending;
+      bar.classList.toggle("is-sending", sending);
+      send.disabled = sending || !input.value.trim();
+      send.setAttribute("aria-label", sending ? "Waiting for replies" : "Send message");
+      send.title = sending ? "Waiting for replies" : "Send";
       for (const [id, panel] of askPanels) {
         panel.hidden = id !== activeAskTab;
         askTabButtons.get(id)?.setAttribute("aria-selected", String(id === activeAskTab));

@@ -18,9 +18,10 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
+png = "0.17.16"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt"] }
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "process"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 pdf-extract = "0.12.1"
 arboard = "3"
@@ -29,12 +30,15 @@ arboard = "3"
 keyring = { version = "3", features = ["windows-native"] }
 windows = { version = "0.61", features = [
   "Win32_Foundation",
+  "Win32_Graphics_Gdi",
   "Win32_Security",
   "Win32_Security_Authorization",
   "Win32_System_Ole",
+  "Win32_System_Com",
   "Win32_System_SystemInformation",
   "Win32_System_Threading",
   "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Accessibility",
   "Win32_UI_WindowsAndMessaging",
 ] }
 

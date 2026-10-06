@@ -172,6 +172,25 @@ pub fn system_idle_seconds() -> Result<u64, String> {
     Err("AI friend mode currently requires Windows system idle detection.".into())
 }
 
+pub fn foreground_window_context(_excluded_hwnd: Option<isize>) -> Option<super::WindowContext> {
+    None
+}
+
+pub fn capture_window(_window_id: isize) -> Result<super::WindowCapture, String> {
+    Err("Foreground-window capture is currently available only on Windows.".into())
+}
+
+pub fn perform_window_action(
+    _window_id: isize,
+    _expected_app_name: &str,
+    _expected_title: &str,
+    _expected_width: u32,
+    _expected_height: u32,
+    _action: super::WindowAction,
+) -> Result<(), String> {
+    Err("Desktop actions are currently available only on Windows.".into())
+}
+
 // ── Island window ─────────────────────────────────────────────────────────────
 
 /// The few gtk-layer-shell calls we need, straight from the C library.

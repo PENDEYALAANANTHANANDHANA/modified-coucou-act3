@@ -27,35 +27,19 @@ function dashedFrame(): SVGSVGElement {
   return el;
 }
 
-export function buildUpload(actions: Pick<ViewActions, "browseFiles" | "browseFolder">): ViewHost {
+export function buildUpload(): ViewHost {
   const frame = dashedFrame();
-  const title = h("div", { class: "drop-title", text: "Drop your files or folders here" });
+  const title = h("div", { class: "drop-title", text: "Drop files or folders here" });
   const tags = h(
     "div",
     { class: "drop-tags" },
     ...["PDF", "Text", "Code"].map((t) => h("span", { text: t })),
   );
-  const browse = h(
-    "div",
-    { class: "drop-browse" },
-    h("button", {
-      class: "btn secondary",
-      type: "button",
-      text: "Choose files…",
-      onclick: actions.browseFiles,
-    }),
-    h("button", {
-      class: "btn secondary",
-      type: "button",
-      text: "Choose folder…",
-      onclick: actions.browseFolder,
-    }),
-  );
   const card = h(
     "div",
     { class: "card drop-card" },
     frame,
-    h("div", { class: "drop-body" }, title, tags, browse),
+    h("div", { class: "drop-body" }, title, tags),
   );
   const el = h("div", { class: "view" }, card);
 

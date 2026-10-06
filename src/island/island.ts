@@ -2,7 +2,6 @@
 // Mirrors IslandRootView.swift + IslandWindowController.swift.
 
 import { Tracked, Spring, clamp } from "../core/anim";
-import { open } from "@tauri-apps/plugin-dialog";
 import { Bridge, IS_TAURI, onDragDrop } from "../core/bridge";
 import {
   EXPANDED_CORNER, EXPANDED_W, NOTCH_W, PANEL_H, PANEL_W,
@@ -89,6 +88,7 @@ export class Island {
   /** Drop sequence bookkeeping: last tick played, and whether the ✓ has fired. */
   private uploadTens = 0;
   private uploadDone = false;
+  private dropReady = false;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -109,8 +109,6 @@ export class Island {
     const actions: ViewActions = {
       setView: (v) => this.setView(v),
       collapse: () => this.collapse(),
-      browseFiles: () => { void this.browseFiles(false); },
-      browseFolder: () => { void this.browseFiles(true); },
       setFocus: (id) => {
         State.setFocus(id);
         Sound.play("pop");
@@ -381,32 +379,6 @@ export class Island {
 
   // ── File drop ───────────────────────────────────────────────────────────────
 
-  private async browseFiles(directory: boolean) {
-    try {
-      const selected = await open(directory
-        ? { directory: true, multiple: false, title: "Choose a folder of documents" }
-        : {
-            multiple: true,
-            title: "Choose documents",
-            filters: [{
-              name: "PDF and text documents",
-              extensions: [
-                "pdf", "txt", "md", "csv", "json", "yaml", "yml", "toml", "xml",
-                "html", "htm", "css", "js", "jsx", "ts", "tsx", "rs", "py", "go",
-                "java", "c", "h", "hpp", "cpp", "sh", "sql", "log", "ini", "conf",
-              ],
-            }],
-          });
-      if (!selected) return;
-      const paths = (Array.isArray(selected) ? selected : [selected]).filter(Boolean);
-      if (paths.length) this.swallow(paths);
-    } catch (error) {
-      State.noteMessage = `Could not choose files: ${String(error).replace(/^Error:\s*/, "")}`;
-      this.setView("note");
-      Sound.play("error");
-    }
-  }
-
   private onDragDrop(e: { type: string; paths?: string[] }) {
     if (e.type !== "over") void Bridge.log(`drag ${e.type} ${e.paths?.length ?? 0} file(s)`);
     if (State.paused) return;
@@ -458,6 +430,8 @@ export class Island {
       : `${paths.length} files`;
     State.droppedFile = { name, path: firstPath };
     State.droppedFiles = [];
+    State.projectRootContext = null;
+    State.attachedWindowContext = null;
     State.activeDocument = paths.length === 1 ? { name, path: firstPath } : null;
     State.promptContext = { kind: "file", name, path: firstPath };
     State.chatHistory = [];
@@ -466,6 +440,7 @@ export class Island {
     UploadSeq.performDrop(State.uploadDuration);
     this.uploadTens = 0;
     this.uploadDone = false;
+    this.dropReady = false;
 
     this.engine.gulp();
     Sound.play("approve");
@@ -479,6 +454,7 @@ export class Island {
     void Bridge.ingestFiles(paths)
       .then((files) => {
         if (generation !== this.dropGeneration) return;
+        this.dropReady = true;
         State.droppedFiles = files.map(({ name, path }) => ({ name, path }));
         State.droppedFile = paths.length === 1
           ? { name: files[0].name, path: files[0].path }
@@ -518,13 +494,13 @@ export class Island {
       Sound.play("tick");
     }
 
-    if (!this.uploadDone && since >= PRE_PROGRESS + dur) {
+    if (!this.uploadDone && this.dropReady && since >= PRE_PROGRESS + dur) {
       this.uploadDone = true;
       Sound.play("approve");
       this.engine.triggerEmote("happy");
     }
     // The extra second is the grow-back, after which the choose card is up.
-    if (since >= PRE_PROGRESS + dur + 1 && State.view === "uploading") {
+    if (this.dropReady && since >= PRE_PROGRESS + dur + 1 && State.view === "uploading") {
       this.setView("choose");
     }
   }
@@ -794,7 +770,12 @@ export class Island {
     }
 
     const uploadActive = this.uploadActive;
-    if (uploadActive) this.uploadCanvas.draw(UploadSeq.frame(), nowMs / 1000);
+    if (uploadActive) {
+      const frame = UploadSeq.frame();
+      State.uploadProgress = this.dropReady ? frame.progress : Math.min(frame.progress, 0.95);
+      this.views.get("uploading")?.sync();
+      this.uploadCanvas.draw(frame, nowMs / 1000);
+    }
     this.uploadCanvas.el.classList.toggle("on", uploadActive);
     this.viewsEl.classList.toggle("hidden-by-upload", uploadActive);
 
@@ -938,7 +919,12 @@ export class Island {
       const wasChat = this.lastSyncedView === "prompt";
       this.lastSyncedView = State.view;
       if (State.view === "prompt") {
-        void Bridge.focusWindow(true);
+        void Bridge.focusWindow(true).then((context) => {
+          if (context) {
+            State.previousWindowContext = context;
+            State.notify();
+          }
+        });
         window.setTimeout(() => this.views.get("prompt")?.focus?.(), 120);
       } else if (wasChat) {
         void Bridge.focusWindow(false);

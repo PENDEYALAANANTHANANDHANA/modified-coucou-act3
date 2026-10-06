@@ -23,6 +23,7 @@ interface HookPayload {
   prompt?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
+  tool_response?: Record<string, unknown>;
   coucou_kind?: string;
   /** Optional agent tag: lowercase, digits and hyphens, ≤ 24 chars. */
   coucou_agent?: string;
@@ -91,6 +92,30 @@ function stepLabel(tool: string, input: Record<string, unknown>): string {
   const query = str("query");
   if (query) return `${label} · ${query.slice(0, 40)}`;
   return label;
+}
+
+function liveFileEdits(tool: string, input: Record<string, unknown>): Array<{
+  path: string;
+  oldText: string;
+  newText: string;
+}> {
+  const path = typeof input.file_path === "string" ? input.file_path : "";
+  if (!path) return [];
+  if (tool === "Edit" && typeof input.old_string === "string" && typeof input.new_string === "string") {
+    return [{ path, oldText: input.old_string, newText: input.new_string }];
+  }
+  if (tool === "Write" && typeof input.content === "string") {
+    return [{ path, oldText: "", newText: input.content }];
+  }
+  if (tool === "MultiEdit" && Array.isArray(input.edits)) {
+    return input.edits.flatMap((raw) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+      const edit = raw as Record<string, unknown>;
+      if (typeof edit.old_string !== "string" || typeof edit.new_string !== "string") return [];
+      return [{ path, oldText: edit.old_string, newText: edit.new_string }];
+    }).slice(0, 10);
+  }
+  return [];
 }
 
 /**
@@ -216,6 +241,7 @@ function handleHook(island: Island, payload: HookPayload) {
   switch (name) {
     case "SessionStart":
       ensurePill();
+      State.clearCodeSession(agentId);
       surface("overview", false);
       Sound.play("work");
       break;
@@ -226,6 +252,7 @@ function handleHook(island: Island, payload: HookPayload) {
       // The field is `prompt`; reading `message` meant this step was always blank.
       const asked = payload.prompt ?? payload.message;
       if (asked) State.appendStep(agentId, asked.slice(0, 60));
+      State.startCodeActivity(agentId, projectName, "Prompt", asked?.slice(0, 100) ?? "New coding request");
       surface("overview", false);
       break;
     }
@@ -272,17 +299,27 @@ function handleHook(island: Island, payload: HookPayload) {
       ensurePill();
       State.updateTask(agentId, "working");
       const tool = payload.tool_name ?? "Tool";
-      State.appendStep(agentId, stepLabel(tool, payload.tool_input ?? {}));
+      const input = payload.tool_input ?? {};
+      State.appendStep(agentId, stepLabel(tool, input));
+      State.startCodeActivity(agentId, projectName, tool, stepLabel(tool, input));
       surface("overview", false);
       break;
     }
 
-    case "PostToolUse":
+    case "PostToolUse": {
       State.updateTask(agentId, "working");
+      const tool = payload.tool_name ?? "Tool";
+      State.finishCodeActivity(agentId, tool);
+      for (const edit of liveFileEdits(tool, payload.tool_input ?? {})) {
+        if (edit.oldText.length + edit.newText.length > 24_000) continue;
+        State.addLiveCodeChange(agentId, projectName, edit.path, edit.oldText, edit.newText);
+      }
       break;
+    }
 
     case "PostToolUseFailure":
       State.updateTask(agentId, "working");
+      State.finishCodeActivity(agentId, payload.tool_name ?? "Tool", true);
       State.appendStep(agentId, "⚠ failed");
       break;
 
@@ -302,6 +339,9 @@ function handleHook(island: Island, payload: HookPayload) {
     case "Stop":
       State.updateTask(agentId, "finished");
       if (payload.message) State.appendStep(agentId, payload.message.slice(0, 60));
+      State.finishCodeActivities(agentId);
+      State.startCodeActivity(agentId, projectName, "Done", payload.message?.slice(0, 120) ?? "Coding session finished");
+      State.finishCodeActivity(agentId, "Done");
       Sound.play("finish");
       if (focused) surface("finished", true);
       else State.setPillBadge(agentId, "finished");
@@ -317,12 +357,14 @@ function handleHook(island: Island, payload: HookPayload) {
 
     case "StopFailure":
       State.updateTask(agentId, "error");
+      State.finishCodeActivities(agentId, true);
       Sound.play("error");
       if (focused) surface("error", true);
       else State.setPillBadge(agentId, "error");
       break;
 
     case "SessionEnd":
+      State.finishCodeActivities(agentId);
       if (isExternalAgent) {
         State.removeTask(agentId);
       } else {

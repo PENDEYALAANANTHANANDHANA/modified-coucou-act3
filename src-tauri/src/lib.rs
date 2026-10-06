@@ -6,6 +6,7 @@ mod hooks;
 mod integrations;
 mod island;
 mod log;
+mod mcp;
 mod pipe;
 mod platform;
 mod secrets;
@@ -117,12 +118,56 @@ fn set_island_rect(app: AppHandle, shared: State<Shared>, x: f64, y: f64, width:
 }
 
 #[tauri::command]
-fn focus_window(app: AppHandle, focused: bool) {
-    let Some(win) = island::window(&app) else { return };
+fn focus_window(app: AppHandle, focused: bool) -> Option<platform::WindowContext> {
+    let Some(win) = island::window(&app) else { return None };
+    let context = focused.then(|| {
+        platform::foreground_window_context(win.hwnd().ok().map(|hwnd| hwnd.0 as isize))
+    }).flatten();
     platform::set_activating(&win, focused);
     if focused {
         let _ = win.set_focus();
     }
+    context
+}
+
+#[tauri::command]
+fn capture_window(window_id: isize) -> Result<platform::WindowCapture, String> {
+    platform::capture_window(window_id)
+}
+
+#[tauri::command]
+fn perform_window_action(
+    window_id: isize,
+    expected_app_name: String,
+    expected_title: String,
+    expected_width: u32,
+    expected_height: u32,
+    action: platform::WindowAction,
+    approved: bool,
+) -> Result<(), String> {
+    if !approved {
+        return Err("Desktop action was not approved.".into());
+    }
+    platform::perform_window_action(
+        window_id,
+        &expected_app_name,
+        &expected_title,
+        expected_width,
+        expected_height,
+        action,
+    )
+}
+
+#[tauri::command]
+async fn propose_window_action(
+    shared: State<'_, Shared>,
+    instruction: String,
+    capture: platform::WindowCapture,
+    agent: claude::ChatAgentId,
+) -> Result<claude::WindowActionProposal, String> {
+    let mut settings = shared.settings.lock().unwrap().clone();
+    agent.configure(&mut settings);
+    claude::propose_window_action(&settings, instruction, capture).await
 }
 
 #[tauri::command]
@@ -183,6 +228,29 @@ fn open_in_vscode(path: Option<String>) -> bool {
         platform::reveal_folder(p);
     }
     false
+}
+
+#[tauri::command]
+fn open_project_in_editor(path: String, editor: String) -> Result<(), String> {
+    let folder = std::path::Path::new(&path);
+    if !(folder.is_absolute() && folder.is_dir()) {
+        return Err("Choose an existing project folder first.".into());
+    }
+    let command = match editor.as_str() {
+        "vscode" => "code",
+        "cursor" => "cursor",
+        "system" => {
+            return platform::reveal_path(&path);
+        }
+        _ => return Err("Choose VS Code, Cursor, or the system file manager.".into()),
+    };
+    let executable = platform::find_on_path(command)
+        .ok_or_else(|| format!("{command} was not found on PATH. Choose another editor or add its command-line launcher."))?;
+    platform::no_console(&mut Command::new(executable))
+        .arg(&path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Could not open the project in {command}: {error}"))
 }
 
 #[tauri::command]
@@ -265,15 +333,34 @@ fn approval_decline(app: AppHandle, request_id: String) {
 /// One chat turn. The API key and any file bytes stay on the Rust side.
 #[tauri::command]
 async fn chat_send(
+    app: AppHandle,
     shared: State<'_, Shared>,
     chat: State<'_, Chat>,
+    pending_mcp: State<'_, mcp::PendingApprovals>,
     query: String,
     context: Option<ChatContext>,
     agent: claude::ChatAgentId,
 ) -> Result<ChatReply, String> {
     let mut settings = shared.settings.lock().unwrap().clone();
     agent.configure(&mut settings);
-    claude::send(&chat, &settings, query, context).await
+    claude::send_with_mcp(
+        &app,
+        &pending_mcp,
+        &chat,
+        &settings,
+        query,
+        context,
+    )
+    .await
+}
+
+#[tauri::command]
+fn mcp_approval_decision(
+    pending: State<'_, mcp::PendingApprovals>,
+    request_id: String,
+    allow: bool,
+) -> Result<(), String> {
+    mcp::decide(&pending, &request_id, allow)
 }
 
 #[tauri::command]
@@ -310,6 +397,42 @@ async fn generate_code_changes(
     }
     let settings = shared.settings.lock().unwrap().clone();
     claude::generate_code_changes(&settings, root, instructions).await
+}
+
+#[tauri::command]
+async fn summarize_project(
+    shared: State<'_, Shared>,
+    root: String,
+) -> Result<String, String> {
+    let settings = shared.settings.lock().unwrap().clone();
+    claude::summarize_project(&settings, root).await
+}
+
+#[tauri::command]
+async fn mcp_list_tools(settings: State<'_, Shared>, server_id: String) -> Result<Vec<mcp::McpTool>, String> {
+    let server = settings.settings.lock().unwrap().mcp_servers.iter()
+        .find(|server| server.id == server_id)
+        .cloned()
+        .ok_or_else(|| "That MCP server is not configured.".to_string())?;
+    mcp::list_tools(&server).await
+}
+
+#[tauri::command]
+async fn mcp_call_tool(
+    settings: State<'_, Shared>,
+    server_id: String,
+    tool_name: String,
+    arguments: serde_json::Value,
+    approved: bool,
+) -> Result<String, String> {
+    if !approved {
+        return Err("Tool call was not approved.".into());
+    }
+    let server = settings.settings.lock().unwrap().mcp_servers.iter()
+        .find(|server| server.id == server_id)
+        .cloned()
+        .ok_or_else(|| "That MCP server is not configured.".to_string())?;
+    mcp::call_tool(&server, &tool_name, arguments).await
 }
 
 #[tauri::command]
@@ -571,6 +694,7 @@ pub fn run() {
             gate: gate.clone(),
         })
         .manage(Pending::default())
+        .manage(mcp::PendingApprovals::default())
         .manage(Chat::default())
         .invoke_handler(tauri::generate_handler![
             boot,
@@ -579,10 +703,14 @@ pub fn run() {
             set_collapsed,
             set_island_rect,
             focus_window,
+            capture_window,
+            perform_window_action,
+            propose_window_action,
             reposition,
             open_url,
             open_local_path,
             open_in_vscode,
+            open_project_in_editor,
             quit_app,
             hooks_status,
             hooks_preview,
@@ -593,8 +721,12 @@ pub fn run() {
             approval_decline,
             log_line,
             chat_send,
+            mcp_approval_decision,
             run_custom_task,
             generate_code_changes,
+            summarize_project,
+            mcp_list_tools,
+            mcp_call_tool,
             apply_code_changes,
             search_files,
             read_text_file,

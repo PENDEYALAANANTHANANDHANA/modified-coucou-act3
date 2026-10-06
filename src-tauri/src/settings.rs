@@ -6,6 +6,18 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct McpServerConfig {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub sound_enabled: bool,
     pub sound_volume: f64,
@@ -46,6 +58,8 @@ pub struct Settings {
     pub omniroute_base_url: String,
     #[serde(default = "default_ollama_url")]
     pub ollama_url: String,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 fn default_model() -> String {
@@ -99,6 +113,7 @@ impl Default for Settings {
             openrouter_base_url: default_openrouter_base_url(),
             omniroute_base_url: default_omniroute_base_url(),
             ollama_url: default_ollama_url(),
+            mcp_servers: Vec::new(),
         }
     }
 }

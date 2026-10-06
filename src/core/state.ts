@@ -46,6 +46,35 @@ export interface PendingQuestion {
   questions: HookQuestionItem[];
 }
 
+export interface PendingMcpApproval {
+  requestId: string;
+  serverId: string;
+  serverName: string;
+  toolName: string;
+  description: string;
+  arguments: unknown;
+}
+
+export interface CodeActivityEntry {
+  id: number;
+  agentId: string;
+  agentName: string;
+  tool: string;
+  detail: string;
+  status: "running" | "done" | "failed";
+  at: number;
+}
+
+export interface LiveCodeChange {
+  id: number;
+  agentId: string;
+  agentName: string;
+  path: string;
+  oldText: string;
+  newText: string;
+  at: number;
+}
+
 export interface ChatMessage {
   id: number;
   role: "user" | "assistant";
@@ -149,6 +178,15 @@ export interface Settings {
   openrouterBaseUrl: string;
   omnirouteBaseUrl: string;
   ollamaUrl: string;
+  mcpServers: McpServerConfig[];
+}
+
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  enabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -176,6 +214,7 @@ export const DEFAULT_SETTINGS: Settings = {
   openrouterBaseUrl: "https://openrouter.ai/api/v1",
   omnirouteBaseUrl: "http://localhost:20128/v1",
   ollamaUrl: "http://127.0.0.1:11434",
+  mcpServers: [],
 };
 
 type Listener = () => void;
@@ -202,6 +241,10 @@ class AppState {
   fileDragOver = false;
 
   promptContext: PromptContext | null = null;
+  projectRootContext: string | null = null;
+  previousWindowContext: { appName: string; title: string; windowId: number } | null = null;
+  attachedWindowContext: { appName: string; title: string; windowId: number } | null = null;
+  attachedWindowCapture: import("./bridge").WindowCapture | null = null;
   droppedFile: { name: string; path: string } | null = null;
   droppedFiles: { name: string; path: string }[] = [];
   activeDocument: { name: string; path: string } | null = null;
@@ -216,6 +259,20 @@ class AppState {
   promptPrefill = "";
   pendingApproval: ApprovalInfo | null = null;
   pendingQuestion: PendingQuestion | null = null;
+  readonly pendingMcpApprovals: PendingMcpApproval[] = [];
+  readonly codeActivity: CodeActivityEntry[] = [];
+  readonly liveCodeChanges: LiveCodeChange[] = [];
+  private nextCodeActivityId = 1;
+  private nextLiveCodeChangeId = 1;
+  pendingDesktopAction: {
+    windowId: number;
+    appName: string;
+    title: string;
+    width: number;
+    height: number;
+    summary: string;
+    action: import("./bridge").WindowAction;
+  } | null = null;
 
   integrations: Record<string, IntegrationInfo> = {};
 
@@ -289,6 +346,66 @@ class AppState {
     const t = this.tasks.find((x) => x.id === id);
     if (!t) return;
     t.pillBadge = badge;
+    this.notify();
+  }
+
+  startCodeActivity(agentId: string, agentName: string, tool: string, detail: string) {
+    const entry: CodeActivityEntry = {
+      id: this.nextCodeActivityId++,
+      agentId,
+      agentName,
+      tool,
+      detail,
+      status: "running",
+      at: Date.now(),
+    };
+    this.codeActivity.push(entry);
+    if (this.codeActivity.length > 40) this.codeActivity.splice(0, this.codeActivity.length - 40);
+    this.notify();
+  }
+
+  finishCodeActivity(agentId: string, tool: string, failed = false) {
+    const entry = [...this.codeActivity].reverse().find(
+      (item) => item.agentId === agentId && item.tool === tool && item.status === "running",
+    );
+    if (!entry) return;
+    entry.status = failed ? "failed" : "done";
+    this.notify();
+  }
+
+  finishCodeActivities(agentId: string, failed = false) {
+    let changed = false;
+    for (const entry of this.codeActivity) {
+      if (entry.agentId === agentId && entry.status === "running") {
+        entry.status = failed ? "failed" : "done";
+        changed = true;
+      }
+    }
+    if (changed) this.notify();
+  }
+
+  clearCodeSession(agentId: string) {
+    const previousActivityCount = this.codeActivity.length;
+    const previousChangeCount = this.liveCodeChanges.length;
+    this.codeActivity.splice(0, this.codeActivity.length, ...this.codeActivity.filter((entry) => entry.agentId !== agentId));
+    this.liveCodeChanges.splice(0, this.liveCodeChanges.length, ...this.liveCodeChanges.filter((change) => change.agentId !== agentId));
+    if (previousActivityCount !== this.codeActivity.length || previousChangeCount !== this.liveCodeChanges.length) {
+      this.notify();
+    }
+  }
+
+  addLiveCodeChange(agentId: string, agentName: string, path: string, oldText: string, newText: string) {
+    const change: LiveCodeChange = {
+      id: this.nextLiveCodeChangeId++,
+      agentId,
+      agentName,
+      path,
+      oldText,
+      newText,
+      at: Date.now(),
+    };
+    this.liveCodeChanges.push(change);
+    if (this.liveCodeChanges.length > 20) this.liveCodeChanges.splice(0, this.liveCodeChanges.length - 20);
     this.notify();
   }
 

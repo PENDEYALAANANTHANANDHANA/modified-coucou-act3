@@ -169,6 +169,125 @@ function claudeSection(status: HookStatus): HTMLElement {
   return section;
 }
 
+function mcpSection(): HTMLElement {
+  const name = h("input", { class: "text-input", placeholder: "Display name, e.g. Local calendar" }) as HTMLInputElement;
+  const command = h("input", { class: "text-input", placeholder: "Executable path, e.g. C:\\Tools\\my-mcp.exe" }) as HTMLInputElement;
+  const args = h("input", { class: "text-input", placeholder: 'Arguments as JSON array, e.g. ["--stdio"]' }) as HTMLInputElement;
+  const status = h("div", { class: "hint", text: "No MCP servers configured." });
+  const servers = h("div", { class: "mcp-servers" });
+  const section = h("section", {},
+    h("h2", {}, statusDot(false), h("span", { text: "App integrations (MCP)" })),
+    h("div", {
+      class: "notice warn",
+      text: "Only add MCP programs you trust. ACT 3 starts the configured executable with your Windows account permissions. Tool calls must be reviewed and approved from Tools.",
+    }),
+    h("div", { class: "hint", text: "Local stdio servers only. ACT 3 passes the executable and arguments directly; it does not run them through a shell." }),
+    h("label", { text: "Server name" }), name,
+    h("label", { text: "Executable" }), command,
+    h("label", { text: "Arguments (JSON array)" }), args,
+    h("div", { class: "row" },
+      h("button", {
+        class: "primary",
+        text: "Add MCP server",
+        onclick: async () => {
+          const serverName = name.value.trim();
+          const executable = command.value.trim();
+          if (!serverName || !executable) {
+            status.textContent = "Enter a server name and executable.";
+            return;
+          }
+          let serverArgs: unknown;
+          try {
+            serverArgs = args.value.trim() ? JSON.parse(args.value) : [];
+          } catch {
+            status.textContent = "Arguments must be a valid JSON array of strings.";
+            return;
+          }
+          if (!Array.isArray(serverArgs) || serverArgs.some((arg) => typeof arg !== "string")) {
+            status.textContent = "Arguments must be a valid JSON array of strings.";
+            return;
+          }
+          settings.mcpServers ??= [];
+          if (settings.mcpServers.length >= 8) {
+            status.textContent = "You can configure up to 8 MCP servers.";
+            return;
+          }
+          settings.mcpServers.push({
+            id: crypto.randomUUID(),
+            name: serverName.slice(0, 80),
+            command: executable.slice(0, 4096),
+            args: serverArgs.slice(0, 64),
+            enabled: true,
+          });
+          try {
+            await save();
+            name.value = "";
+            command.value = "";
+            args.value = "";
+            render();
+            status.textContent = "MCP server saved. Open Tools to discover its tools.";
+          } catch (error) {
+            status.textContent = `Could not save MCP server: ${String(error).replace(/^Error:\\s*/, "")}`;
+          }
+        },
+      }),
+    ),
+    servers,
+    status,
+  );
+
+  function render() {
+    clear(servers);
+    const configured = settings.mcpServers ?? [];
+    if (!configured.length) {
+      status.textContent = "No MCP servers configured.";
+      return;
+    }
+    for (const server of configured) {
+      const label = h("span", {
+        class: "hint",
+        text: `${server.enabled ? "Enabled" : "Disabled"} · ${server.command} ${server.args.join(" ")}`.trim(),
+      });
+      const toggleButton = h("button", {
+        class: "secondary",
+        text: server.enabled ? "Disable" : "Enable",
+        onclick: async () => {
+          server.enabled = !server.enabled;
+          try {
+            await save();
+            render();
+          } catch (error) {
+            server.enabled = !server.enabled;
+            status.textContent = `Could not update server: ${String(error).replace(/^Error:\\s*/, "")}`;
+          }
+        },
+      });
+      const removeButton = h("button", {
+        class: "danger",
+        text: "Remove",
+        onclick: async () => {
+          settings.mcpServers = configured.filter((item) => item.id !== server.id);
+          try {
+            await save();
+            render();
+          } catch (error) {
+            settings.mcpServers = configured;
+            status.textContent = `Could not remove server: ${String(error).replace(/^Error:\\s*/, "")}`;
+          }
+        },
+      });
+      servers.append(h("div", { class: "mcp-server-row" },
+        h("strong", { text: server.name }),
+        label,
+        toggleButton,
+        removeButton,
+      ));
+    }
+  }
+  render();
+  return section;
+}
+
 // ── AI provider section ───────────────────────────────────────────────────────
 
 const MODELS: [string, string][] = [
@@ -848,6 +967,7 @@ async function main() {
     ),
     claudeSection(status),
     apiSection(),
+    mcpSection(),
     updaterSection(),
     integrationsSection(present),
     generalSection(),
