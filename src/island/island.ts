@@ -2,6 +2,7 @@
 // Mirrors IslandRootView.swift + IslandWindowController.swift.
 
 import { Tracked, Spring, clamp } from "../core/anim";
+import { open } from "@tauri-apps/plugin-dialog";
 import { Bridge, IS_TAURI, onDragDrop } from "../core/bridge";
 import {
   EXPANDED_CORNER, EXPANDED_W, NOTCH_W, PANEL_H, PANEL_W,
@@ -108,6 +109,8 @@ export class Island {
     const actions: ViewActions = {
       setView: (v) => this.setView(v),
       collapse: () => this.collapse(),
+      browseFiles: () => { void this.browseFiles(false); },
+      browseFolder: () => { void this.browseFiles(true); },
       setFocus: (id) => {
         State.setFocus(id);
         Sound.play("pop");
@@ -377,6 +380,32 @@ export class Island {
   }
 
   // ── File drop ───────────────────────────────────────────────────────────────
+
+  private async browseFiles(directory: boolean) {
+    try {
+      const selected = await open(directory
+        ? { directory: true, multiple: false, title: "Choose a folder of documents" }
+        : {
+            multiple: true,
+            title: "Choose documents",
+            filters: [{
+              name: "PDF and text documents",
+              extensions: [
+                "pdf", "txt", "md", "csv", "json", "yaml", "yml", "toml", "xml",
+                "html", "htm", "css", "js", "jsx", "ts", "tsx", "rs", "py", "go",
+                "java", "c", "h", "hpp", "cpp", "sh", "sql", "log", "ini", "conf",
+              ],
+            }],
+          });
+      if (!selected) return;
+      const paths = (Array.isArray(selected) ? selected : [selected]).filter(Boolean);
+      if (paths.length) this.swallow(paths);
+    } catch (error) {
+      State.noteMessage = `Could not choose files: ${String(error).replace(/^Error:\s*/, "")}`;
+      this.setView("note");
+      Sound.play("error");
+    }
+  }
 
   private onDragDrop(e: { type: string; paths?: string[] }) {
     if (e.type !== "over") void Bridge.log(`drag ${e.type} ${e.paths?.length ?? 0} file(s)`);

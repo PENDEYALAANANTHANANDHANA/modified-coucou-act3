@@ -92,8 +92,8 @@ fn system_idle_seconds() -> Result<u64, String> {
     platform::system_idle_seconds()
 }
 
-/// Hidden island → shrink the window to the invisible wake strip and park the
-/// cursor poll; anything else → full panel and 60 Hz polling.
+/// Hidden island → shrink to the invisible wake strip where supported; otherwise
+/// retain the full transparent panel. Windows keeps polling for file drags.
 #[tauri::command]
 fn set_collapsed(app: AppHandle, shared: State<Shared>, collapsed: bool) {
     let pref = shared.settings.lock().unwrap().screen.clone();
@@ -101,7 +101,9 @@ fn set_collapsed(app: AppHandle, shared: State<Shared>, collapsed: bool) {
     island::apply_geometry(&app, &pref, collapsed);
     // The wake strip must always take the mouse, and a resize invalidates the flag.
     island::refresh_click_through(&app, &shared.gate);
-    shared.gate.set_active(!collapsed);
+    // Windows keeps a full-size transparent panel while collapsed. Keep the
+    // cursor poll alive there so a file drag can temporarily make it a target.
+    shared.gate.set_active(!collapsed || platform::CURSOR_POLL);
 }
 
 /// The front end pushes the island shape; Rust decides click-through from it.
@@ -563,6 +565,7 @@ pub fn run() {
             let _ = app.emit_to(island::WINDOW_LABEL, "tray", "open".to_string());
         }))
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_dialog::init())
         .manage(Shared {
             settings: Mutex::new(loaded.clone()),
             gate: gate.clone(),

@@ -53,7 +53,8 @@ pub struct IslandRect {
     pub h: f64,
 }
 
-/// Wakes / parks the cursor poll thread so a hidden island costs literally nothing.
+/// Wakes / parks the cursor poll thread; Windows also keeps it active while
+/// collapsed so the transparent panel can become a target during file drags.
 pub struct PollGate {
     active: Mutex<bool>,
     cv: Condvar,
@@ -200,8 +201,8 @@ fn current_screen_key(app: &AppHandle) -> Option<(i32, i32, u32, u32, u64)> {
     Some((p.x, p.y, size.width, size.height, m.scale_factor().to_bits()))
 }
 
-/// Emits `cursor` (window-logical coordinates) at ~60 Hz while the island is
-/// visible. Parked on a condvar the rest of the time.
+/// Emits `cursor` (window-logical coordinates) at ~60 Hz while active. Windows
+/// stays active while collapsed to detect file drags; other platforms park it.
 pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
     std::thread::spawn(move || {
         let mut was_down = false;
@@ -246,14 +247,21 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                     Ok(s) => (s.width as f64 / scale, s.height as f64 / scale),
                     Err(_) => (PANEL_W, PANEL_H),
                 };
+                // Click-through: the window only takes the mouse over the island
+                // shape. A small entry margin means the flag is already off by the
+                // time a moving cursor reaches a button.
+                let down = left_button_down();
+                if down && !was_down {
+                    let handle = app.clone();
+                    let _ = app.run_on_main_thread(move || platform::unblock_webview_drops(&handle));
+                }
+                was_down = down;
+
                 if (x - last.0).abs() < 1.0 && (y - last.1).abs() < 1.0 {
                     continue;
                 }
                 last = (x, y);
 
-                // Click-through: the window only takes the mouse over the island
-                // shape. A small entry margin means the flag is already off by the
-                // time a moving cursor reaches a button.
                 let r = *gate.rect.lock().unwrap();
                 let on_island = r.w > 0.0
                     && x >= r.x - HIT_MARGIN
@@ -270,13 +278,6 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                 // the mouse, which also makes the drop zone as forgiving as the Mac's.
                 // A press may be the start of a drag: make sure the drop target is
                 // ours before the file arrives.
-                let down = left_button_down();
-                if down && !was_down {
-                    let handle = app.clone();
-                    let _ = app.run_on_main_thread(move || platform::unblock_webview_drops(&handle));
-                }
-                was_down = down;
-
                 let dragging = down
                     && x >= 0.0
                     && x <= size.0

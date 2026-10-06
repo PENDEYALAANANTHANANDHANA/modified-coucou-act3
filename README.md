@@ -47,7 +47,7 @@ ACT 3 opens the matching GitHub Release so you can download and run the installe
 | Click the small island | It opens |
 | Click Mochi | It gets annoyed. Three times in a row and it goes dizzy |
 | Rest the pointer on Mochi for two seconds | Hearts |
-| Drag up to 20 files into the top-centre panel area | Works even while ACT 3 is tucked away; Mochi copies files from any folder privately, then offers to answer questions about them together |
+| Drop files or folders, or use **Drop → Choose files/folder…** | Works from any folder; Mochi privately copies supported documents and can answer questions across them |
 | `Esc` | Closes the island |
 | Tray icon | Open, Settings…, Pause, Quit |
 
@@ -119,12 +119,18 @@ Anthropic chat support has been removed. Claude Code hooks remain a separate
 integration and can be left disabled if you do not use Claude Code.
 
 Drop up to 20 PDFs or UTF-8 text files at once—from any directory—to ask
-questions across them together. ACT 3 makes private inbox copies, so originals
-are untouched and their location does not matter. Each file is limited to
-10 MB; a drop is limited to 50 MB total and combined extracted context to
-200,000 characters. The documents stay attached for follow-up questions in the
-same chat. Scanned/image-only PDFs are not supported yet because they require
-OCR.
+questions across them together. You can also use **Drop → Choose files…** or
+**Choose folder…** when dragging from Explorer is inconvenient. Folder imports
+collect PDFs and common text/code files through eight levels, skip symlinks and
+build/dependency folders, and stop at 20 files or 10,000 directory entries.
+ACT 3 makes private inbox copies, so originals are untouched and their location
+does not matter. Each file is limited to 10 MB; a batch is limited to 50 MB
+total and combined extracted context to 200,000 characters. The documents stay
+attached for follow-up questions in the same chat. Scanned/image-only PDFs and
+binary office documents are not supported yet.
+
+The Code tab's **Choose folder…** button opens a native project-folder picker;
+the selected project is remembered for the next session.
 
 The chat has three color-coded bots with separate conversation histories:
 **OmniRoute** (purple) uses its configured online model router, **OpenRouter**

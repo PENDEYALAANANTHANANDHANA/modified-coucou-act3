@@ -3,6 +3,7 @@
 // identically.
 
 import { h, svg, clear, dot } from "./dom";
+import { open } from "@tauri-apps/plugin-dialog";
 import { ICONS } from "./icons";
 import { Ticker } from "./ticker";
 import { State, type AgentTask, type PendingQuestion } from "../core/state";
@@ -29,6 +30,8 @@ export interface ViewActions {
   toggleSound(): void;
   setVolume(v: number): void;
   setAutoClose(seconds: number): void;
+  browseFiles(): void;
+  browseFolder(): void;
   openSettingsWindow(): void;
   blip(): void;
 }
@@ -905,6 +908,21 @@ function buildTools(actions: ViewActions): ViewHost {
   });
   const projectChanges = h("div", { class: "code-changes" });
   const autoApply = h("input", { type: "checkbox" }) as HTMLInputElement;
+  const chooseProject = btn("Choose folder…", "secondary", async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Choose project folder",
+      });
+      if (!selected) return;
+      rootInput.value = selected;
+      rootInput.dispatchEvent(new Event("change"));
+      projectStatus.textContent = `Selected project folder: ${selected}`;
+    } catch (error) {
+      projectStatus.textContent = `Could not choose project folder: ${String(error).replace(/^Error:\s*/, "")}`;
+    }
+  });
   const openProject = btn("Open in VS Code", "secondary", async () => {
     const root = rootInput.value.trim();
     if (!root) {
@@ -1078,7 +1096,7 @@ function buildTools(actions: ViewActions): ViewHost {
       h("div", { class: "tool-section code-agent" },
         h("div", { class: "tool-title", text: "Code with ACT 3" }),
         h("div", { class: "tool-muted", text: "Describe a code change; ACT 3 reads a bounded set of source files, generates edits, and can apply them in this project. It never runs commands." }),
-        h("div", { class: "tool-row project-path-row" }, rootInput, openProject),
+        h("div", { class: "tool-row project-path-row" }, rootInput, chooseProject, openProject),
         projectPrompt,
         h("div", { class: "tool-row code-agent-actions" }, autoApply, h("span", { class: "tool-muted", text: "Automatically apply generated edits without review" }), generateCode),
         projectStatus,
@@ -1152,7 +1170,7 @@ export function buildViews(
   map.set("note", buildNote());
   map.set("settings", buildSettings(actions));
   const prompt = buildPrompt(onChatHeightChange);
-  map.set("upload", buildUpload());
+  map.set("upload", buildUpload(actions));
   map.set("uploading", buildUploading());
   map.set("choose", buildChoose(actions));
   // Not in the Windows v1: sending a file by email, window attach + web result.
