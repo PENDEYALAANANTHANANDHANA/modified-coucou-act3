@@ -234,7 +234,7 @@ async fn wait_for_decision(id: &str, rx: &mut mpsc::Receiver<Reply>) -> Option<S
         Ok(Some(Reply::Ack)) => {}
         // A click that beats the ack is still a click.
         Ok(Some(Reply::Decision(d))) => {
-            log::line(format!("hook id={id} answered {d}"));
+            log::line(format!("hook id={id} {}", decision_summary(&d)));
             return Some(d);
         }
         Ok(Some(Reply::Decline)) => {
@@ -250,7 +250,7 @@ async fn wait_for_decision(id: &str, rx: &mut mpsc::Receiver<Reply>) -> Option<S
 
     match tokio::time::timeout(DECISION_TIMEOUT, rx.recv()).await {
         Ok(Some(Reply::Decision(d))) => {
-            log::line(format!("hook id={id} answered {d}"));
+            log::line(format!("hook id={id} {}", decision_summary(&d)));
             Some(d)
         }
         Ok(Some(Reply::Decline)) => {
@@ -261,6 +261,18 @@ async fn wait_for_decision(id: &str, rx: &mut mpsc::Receiver<Reply>) -> Option<S
             log::line(format!("hook id={id} timed out — terminal takes over"));
             None
         }
+    }
+}
+
+fn decision_summary(decision: &str) -> &'static str {
+    match decision.trim() {
+        "allow" | "always" => "allowed permission request",
+        "deny" => "denied permission request",
+        _ if serde_json::from_str::<Value>(decision)
+            .ok()
+            .and_then(|value| value.get("coucouDecision").and_then(Value::as_str).map(str::to_owned))
+            .as_deref() == Some("answer") => "answered question",
+        _ => "received decision",
     }
 }
 
@@ -339,7 +351,7 @@ fn validate_question_answers(answers: &Value) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_question_answers;
+    use super::{decision_summary, validate_question_answers};
     use serde_json::json;
 
     #[test]
@@ -355,5 +367,15 @@ mod tests {
         assert!(validate_question_answers(&json!({})).is_err());
         assert!(validate_question_answers(&json!({"Q": ["", "Valid"]})).is_err());
         assert!(validate_question_answers(&json!({"Q": "x".repeat(1001)})).is_err());
+    }
+
+    #[test]
+    fn logs_never_include_typed_question_answers() {
+        let answer = json!({
+            "coucouDecision": "answer",
+            "answers": { "Question": "private answer" },
+        }).to_string();
+        assert_eq!(decision_summary(&answer), "answered question");
+        assert_eq!(decision_summary("allow"), "allowed permission request");
     }
 }
