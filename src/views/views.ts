@@ -34,6 +34,11 @@ export interface ViewActions {
 export interface ViewHost {
   el: HTMLElement;
   sync(): void;
+  attachAskPanels?(
+    panels: { id: string; label: string; element: HTMLElement }[],
+    sync: () => void,
+    tick: (nowMs: number) => void,
+  ): void;
   /** Called when the view becomes active, for views with a text field. */
   focus?(): void;
   /** Called every frame while the view is on screen. */
@@ -976,7 +981,7 @@ export function buildViews(
   map.set("confused", buildConfused());
   map.set("note", buildNote());
   map.set("settings", buildSettings(actions));
-  map.set("prompt", buildPrompt(onChatHeightChange));
+  const prompt = buildPrompt(onChatHeightChange);
   map.set("upload", buildUpload());
   map.set("uploading", buildUploading());
   map.set("choose", buildChoose(actions));
@@ -984,6 +989,38 @@ export function buildViews(
   map.set("mail", buildPlaceholder("Sending by email isn't in this version.", ""));
   map.set("searching", buildPlaceholder("ACT 3 is searching…", ""));
   map.set("result", buildPlaceholder("Result", ""));
-  map.set("tools", buildTools(actions));
+  const tools = buildTools(actions);
+  const toolGrid = tools.el.querySelector(".tool-grid");
+  if (toolGrid) {
+    const taskPanel = h("div", { class: "ask-inline-panel", "data-ask-panel": "tasks" });
+    const codePanel = h("div", { class: "ask-inline-panel", "data-ask-panel": "code" });
+    const morePanel = h("div", { class: "ask-inline-panel", "data-ask-panel": "more" });
+    for (const child of Array.from(toolGrid.children)) {
+      if (child.classList.contains("task-runner") || child.classList.contains("task-maker")) {
+        taskPanel.append(child);
+      } else if (child.classList.contains("code-agent")) {
+        codePanel.append(child);
+      } else {
+        morePanel.append(child);
+      }
+    }
+    if (!taskPanel.childElementCount) {
+      taskPanel.append(h("div", { class: "tool-muted", text: "Task tools are unavailable." }));
+    }
+    if (!codePanel.childElementCount) {
+      codePanel.append(h("div", { class: "tool-muted", text: "Code tools are unavailable." }));
+    }
+    prompt.attachAskPanels?.([
+      { id: "tasks", label: "Tasks", element: taskPanel },
+      { id: "code", label: "Code", element: codePanel },
+      { id: "more", label: "More", element: morePanel },
+    ], () => tools.sync(), (nowMs) => tools.tick?.(nowMs));
+    toolGrid.append(h("div", {
+      class: "tool-muted tools-moved-hint",
+      text: "Tasks and Code are now available as tabs in Ask.",
+    }));
+  }
+  map.set("prompt", prompt);
+  map.set("tools", tools);
   return map;
 }

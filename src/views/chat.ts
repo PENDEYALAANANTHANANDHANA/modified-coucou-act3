@@ -54,6 +54,65 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     "aria-label": "Choose one or more ACT 3 bots",
   });
   const agentPicker = h("div", { class: "chat-agent-picker" });
+  const askTabs = h("div", {
+    class: "ask-tabs",
+    role: "tablist",
+    "aria-label": "Ask sections",
+  });
+  const chatPanel = h("div", {
+    class: "ask-inline-panel chat-tab-panel",
+    "data-ask-panel": "chat",
+    role: "tabpanel",
+  });
+  const askPanels = new Map<string, HTMLElement>([["chat", chatPanel]]);
+  const askTabButtons = new Map<string, HTMLButtonElement>();
+  let activeAskTab = "chat";
+  let syncAskPanel = () => {};
+  let tickAskPanel = (_nowMs: number) => {};
+  function selectAskTab(id: string) {
+    if (!askPanels.has(id)) return;
+    activeAskTab = id;
+    pickerOpen = false;
+    syncAgentOptions();
+    for (const [tabId, panel] of askPanels) {
+      panel.hidden = tabId !== id;
+      askTabButtons.get(tabId)?.setAttribute("aria-selected", String(tabId === id));
+      askTabButtons.get(tabId)?.classList.toggle("active", tabId === id);
+    }
+    if (id !== "chat") syncAskPanel();
+    State.notify();
+    onHeightChange();
+  }
+  function addAskTab(id: string, label: string, panel: HTMLElement) {
+    const button = h("button", {
+      class: "ask-tab",
+      type: "button",
+      role: "tab",
+      "aria-selected": "false",
+      "aria-controls": `ask-panel-${id}`,
+      text: label,
+      onclick: () => selectAskTab(id),
+    }) as HTMLButtonElement;
+    panel.id = `ask-panel-${id}`;
+    panel.classList.add("ask-inline-panel");
+    panel.hidden = true;
+    askPanels.set(id, panel);
+    askTabButtons.set(id, button);
+    askTabs.append(button);
+    chatPanel.parentElement?.append(panel);
+  }
+  const chatTabButton = h("button", {
+    class: "ask-tab active",
+    type: "button",
+    role: "tab",
+    "aria-selected": "true",
+    "aria-controls": "ask-panel-chat",
+    text: "Chat",
+    onclick: () => selectAskTab("chat"),
+  }) as HTMLButtonElement;
+  chatPanel.id = "ask-panel-chat";
+  askTabButtons.set("chat", chatTabButton);
+  askTabs.append(chatTabButton);
   const selectedAgents: ChatAgentId[] = [State.chatAgent];
   let pickerOpen = false;
   let sending = false;
@@ -215,11 +274,16 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   const send = h("button", { class: "send-btn", title: "Send" }, svg(ICONS.arrowUp, 11));
   const bar = h("div", { class: "chat-bar" }, input, send);
 
+  chatPanel.append(agentPicker, chipRow, log, bar);
   const el = h(
     "div",
     { class: "view" },
-    h("div", { class: "card wash chat-card" }, h("div", { class: "chat-body" }, agentPicker, chipRow, log, bar)),
+    h("div", { class: "card wash chat-card" },
+      h("div", { class: "chat-body" }, askTabs, chatPanel)),
   );
+  for (const [id, panel] of askPanels) {
+    panel.hidden = id !== "chat";
+  }
   const card = el.querySelector(".card") as HTMLElement;
   card.style.setProperty("--wash", "rgba(167,139,250,0.38)");
 
@@ -324,13 +388,23 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
 
   return {
     el,
+    attachAskPanels(panels, sync, tick) {
+      syncAskPanel = sync;
+      tickAskPanel = tick;
+      for (const panel of panels) addAskTab(panel.id, panel.label, panel.element);
+    },
+    tick(nowMs) {
+      if (activeAskTab !== "chat") tickAskPanel(nowMs);
+    },
     sync() {
+      if (State.view !== "prompt" && pickerOpen) pickerOpen = false;
       if (!appliedPrefill && State.promptPrefill) {
         input.value = State.promptPrefill;
         State.promptPrefill = "";
         appliedPrefill = true;
       }
       syncAgentOptions();
+      if (activeAskTab !== "chat") syncAskPanel();
       card.style.setProperty(
         "--wash",
         State.chatAgent === "omniroute" ? "rgba(167,139,250,0.38)"
@@ -373,6 +447,11 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
           ? "Ask about it, or say “write in this file…”"
           : "Continue…";
       input.disabled = sending;
+      for (const [id, panel] of askPanels) {
+        panel.hidden = id !== activeAskTab;
+        askTabButtons.get(id)?.setAttribute("aria-selected", String(id === activeAskTab));
+        askTabButtons.get(id)?.classList.toggle("active", id === activeAskTab);
+      }
     },
     focus() {
       input.focus();
