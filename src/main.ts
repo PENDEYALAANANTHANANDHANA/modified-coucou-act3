@@ -21,6 +21,11 @@ async function main() {
   const boot = await Bridge.boot();
   if (boot) {
     State.settings = { ...State.settings, ...boot.settings };
+    State.setChatAgent(
+      State.settings.provider === "ollama"
+        ? "ollama"
+        : State.settings.provider === "omniroute" ? "omniroute" : "openrouter",
+    );
   }
   island.applySettings();
   State.loadIntegrationTasks();

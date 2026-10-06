@@ -34,6 +34,34 @@ export interface ChatMessage {
   content: string;
 }
 
+export type ChatAgentId = "omniroute" | "openrouter" | "ollama";
+
+export const CHAT_AGENTS: Record<ChatAgentId, {
+  name: string;
+  purpose: string;
+  color: string;
+  modelSetting: "omnirouteModel" | "openrouterModel" | "ollamaModel";
+}> = {
+  omniroute: {
+    name: "OmniRoute",
+    purpose: "Online model router",
+    color: "#a855f7",
+    modelSetting: "omnirouteModel",
+  },
+  openrouter: {
+    name: "OpenRouter",
+    purpose: "Cloud model catalog",
+    color: "#38bdf8",
+    modelSetting: "openrouterModel",
+  },
+  ollama: {
+    name: "Ollama",
+    purpose: "Local model chat",
+    color: "#a3e635",
+    modelSetting: "ollamaModel",
+  },
+};
+
 export type PromptContext =
   | { kind: "window"; appName: string; title: string; url?: string }
   | { kind: "file"; name: string; path?: string };
@@ -95,6 +123,9 @@ export interface Settings {
   hooksInstalled: boolean;
   /** Selected model used by the active provider. */
   model: string;
+  omnirouteModel: string;
+  openrouterModel: string;
+  ollamaModel: string;
   provider: "online" | "openrouter" | "omniroute" | "ollama";
   onlineBaseUrl: string;
   openrouterBaseUrl: string;
@@ -119,6 +150,9 @@ export const DEFAULT_SETTINGS: Settings = {
   autostart: false,
   hooksInstalled: false,
   model: "openrouter/auto",
+  omnirouteModel: "openrouter/auto",
+  openrouterModel: "openrouter/auto",
+  ollamaModel: "llama3.2",
   provider: "openrouter",
   onlineBaseUrl: "https://api.openai.com/v1",
   openrouterBaseUrl: "https://openrouter.ai/api/v1",
@@ -155,7 +189,12 @@ class AppState {
   activeDocument: { name: string; path: string } | null = null;
   noteMessage: string | null = null;
   searchResult: SearchResult | null = null;
-  chatHistory: ChatMessage[] = [];
+  chatAgent: ChatAgentId = "openrouter";
+  readonly chatHistories: Record<ChatAgentId, ChatMessage[]> = {
+    omniroute: [],
+    openrouter: [],
+    ollama: [],
+  };
   promptPrefill = "";
   pendingApproval: ApprovalInfo | null = null;
 
@@ -166,6 +205,20 @@ class AppState {
   settings: Settings = { ...DEFAULT_SETTINGS };
 
   private listeners = new Set<Listener>();
+
+  get chatHistory(): ChatMessage[] {
+    return this.chatHistories[this.chatAgent];
+  }
+
+  set chatHistory(messages: ChatMessage[]) {
+    this.chatHistories[this.chatAgent] = messages;
+  }
+
+  setChatAgent(agent: ChatAgentId) {
+    if (this.chatAgent === agent) return;
+    this.chatAgent = agent;
+    this.notify();
+  }
 
   subscribe(fn: Listener): () => void {
     this.listeners.add(fn);

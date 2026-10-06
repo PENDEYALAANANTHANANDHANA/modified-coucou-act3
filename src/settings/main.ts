@@ -184,7 +184,7 @@ function apiSection(): HTMLElement {
 
   // ── Ollama status card ──────────────────────────────────────────────────
   const ollamaEndpoint = h("span", { class: "path", text: settings.ollamaUrl || "http://127.0.0.1:11434" });
-  const ollamaSelectedModel = h("span", { class: "hint", text: settings.model });
+  const ollamaSelectedModel = h("span", { class: "hint", text: settings.ollamaModel });
   const ollamaActiveDot = statusDot(false);
   const ollamaActiveLabel = h("span", { class: "hint", text: "checking…" });
   const ollamaModelCount = h("span", { class: "hint", text: "—" });
@@ -226,7 +226,7 @@ function apiSection(): HTMLElement {
 
   const ollamaCard = h(
     "div",
-    { style: "background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px" },
+    { class: "provider-status-card ollama-status-card" },
     h("div", { style: "font:600 12px var(--font);color:var(--ink);display:flex;align-items:center;gap:6px" },
       h("span", { text: "Ollama" }),
     ),
@@ -256,7 +256,7 @@ function apiSection(): HTMLElement {
 
   const onlineStatusCard = h(
     "div",
-    { style: "background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px" },
+    { class: "provider-status-card" },
     h("div", { style: "font:600 12px var(--font);color:var(--ink)" }, h("span", { text: "Online provider key status" })),
     h("div", { style: "display:flex;flex-wrap:wrap;gap:6px" }, openaiBadge, openrouterBadge, omnirouteBadge),
   );
@@ -281,7 +281,7 @@ function apiSection(): HTMLElement {
       ollamaActiveLabel.textContent = s.ollama;
       ollamaActiveLabel.style.color = "";
       ollamaEndpoint.textContent = settings.ollamaUrl || "http://127.0.0.1:11434";
-      ollamaSelectedModel.textContent = settings.model;
+      ollamaSelectedModel.textContent = settings.ollamaModel;
       detectedOllamaModels = s.ollamaModels;
       updateModelOptions();
       const countMatch = s.ollama.match(/(\d+)\s*model/);
@@ -372,15 +372,21 @@ function apiSection(): HTMLElement {
     style: "flex:1 1 auto;min-width:0",
   }) as HTMLInputElement;
 
+  const selectedModel = () => settings.provider === "ollama"
+    ? settings.ollamaModel
+    : settings.provider === "omniroute" ? settings.omnirouteModel
+      : settings.provider === "openrouter" ? settings.openrouterModel : settings.model;
+
   function updateModelOptions() {
     clear(modelOptions);
     const suggestions = settings.provider === "ollama"
       ? [...detectedOllamaModels]
       : settings.provider === "openrouter" ? MODELS.map(([id]) => id) : [];
-    if (settings.model && !suggestions.includes(settings.model)) suggestions.unshift(settings.model);
+    const current = selectedModel();
+    if (current && !suggestions.includes(current)) suggestions.unshift(current);
     for (const name of suggestions) modelOptions.append(h("option", { value: name }));
-    model.value = settings.model;
-    ollamaSelectedModel.textContent = settings.model;
+    model.value = current;
+    ollamaSelectedModel.textContent = settings.ollamaModel;
   }
   updateModelOptions();
   const keyName = () => settings.provider === "openrouter" ? "openrouter-api-key"
@@ -434,19 +440,24 @@ function apiSection(): HTMLElement {
   model.addEventListener("change", () => {
     const value = model.value.trim();
     if (!value) {
-      model.value = settings.model;
+      model.value = selectedModel();
       return;
     }
+    if (settings.provider === "ollama") settings.ollamaModel = value;
+    else if (settings.provider === "omniroute") settings.omnirouteModel = value;
+    else if (settings.provider === "openrouter") settings.openrouterModel = value;
+    else settings.model = value;
     settings.model = value;
-    ollamaSelectedModel.textContent = settings.model;
+    ollamaSelectedModel.textContent = settings.ollamaModel;
     updateModelOptions();
     void save();
   });
   model.addEventListener("input", () => {
-    ollamaSelectedModel.textContent = model.value;
+    if (settings.provider === "ollama") ollamaSelectedModel.textContent = model.value;
   });
   provider.addEventListener("change", async () => {
     settings.provider = provider.value as Settings["provider"];
+    settings.model = selectedModel();
     endpoint.value = endpointValue();
     endpoint.placeholder = settings.provider === "ollama"
       ? "http://127.0.0.1:11434"
@@ -508,7 +519,7 @@ function apiSection(): HTMLElement {
 
   return h(
     "section",
-    {},
+    { class: "settings-section provider-section" },
     h("h2", {}, dot, h("span", { text: "AI provider" })),
     h("div", { class: "row" }, refreshAllBtn, openSettingsBtn),
     ollamaCard,
@@ -828,7 +839,13 @@ async function main() {
 
   clear(root);
   root.append(
-    h("h1", {}, h("span", { text: "ACT 3" }), h("span", { class: "version", text: version })),
+    h("header", { class: "settings-brand" },
+      h("div", { class: "settings-brand-mark", "aria-hidden": "true" }, "3"),
+      h("div", {},
+        h("h1", {}, h("span", { text: "ACT 3" }), h("span", { class: "version", text: version })),
+        h("p", { class: "settings-subtitle", text: "Companion settings · Private by design" }),
+      ),
+    ),
     claudeSection(status),
     apiSection(),
     updaterSection(),

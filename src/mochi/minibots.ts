@@ -22,7 +22,11 @@ const live = new Map<HTMLCanvasElement, MiniBot>();
  * `.frame(width: 22)`. Sizing the canvas itself to `bodySize` would shrink the
  * whole drawing to 60 %, which is what used to happen.
  */
-export function createMiniBot(task: AgentTask, bodySize: number): HTMLElement {
+export function createMiniBot(
+  task: AgentTask,
+  bodySize: number,
+  bodyColor: string | null = task.color,
+): HTMLElement {
   const slot = document.createElement("span");
   slot.className = "mini";
   slot.style.width = `${bodySize}px`;
@@ -39,7 +43,7 @@ export function createMiniBot(task: AgentTask, bodySize: number): HTMLElement {
 
   const engine = new BotEngine();
   engine.isMini = true;
-  engine.bodyColor = hexToRGB(task.color);
+  engine.bodyColor = bodyColor ? hexToRGB(bodyColor) : null;
   engine.setState(task.state, true);
   if (task.emote) engine.setPermanentEmote(task.emote);
   if (task.miniEye) {

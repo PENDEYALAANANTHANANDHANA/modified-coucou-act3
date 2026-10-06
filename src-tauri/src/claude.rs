@@ -8,6 +8,7 @@ use std::path::Path;
 use crate::secrets;
 use crate::settings::Settings;
 
+const ACT3_AGENT_RULES: &str = include_str!("../../AGENTS.md");
 pub const DEFAULT_MODEL: &str = "openrouter/auto";
 pub const DEFAULT_OPENROUTER_URL: &str = "https://openrouter.ai/api/v1";
 const MAX_DOCUMENT_BYTES: u64 = 10 * 1024 * 1024;
@@ -16,8 +17,56 @@ const MAX_DOCUMENT_TEXT_CHARS: usize = 200_000;
 #[derive(Default)]
 pub struct Chat;
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChatAgentId {
+    Omniroute,
+    Openrouter,
+    Ollama,
+}
+
+impl ChatAgentId {
+    pub fn configure(self, settings: &mut Settings) {
+        match self {
+            Self::Omniroute => {
+                settings.provider = "omniroute".into();
+                settings.model = settings.omniroute_model.clone();
+            }
+            Self::Openrouter => {
+                settings.provider = "openrouter".into();
+                settings.model = settings.openrouter_model.clone();
+            }
+            Self::Ollama => {
+                settings.provider = "ollama".into();
+                settings.model = settings.ollama_model.clone();
+            }
+        }
+    }
+
+    fn instructions(self) -> &'static str {
+        match self {
+            Self::Omniroute => {
+                "You are the purple OmniRoute chat bot. You use the configured online model router. Be clear that requests and context may be sent to that configured service."
+            }
+            Self::Openrouter => {
+                "You are the orange OpenRouter chat bot. You use the user's configured OpenRouter model and endpoint. Be transparent that prompts and context are sent to OpenRouter."
+            }
+            Self::Ollama => {
+                "You are the green Ollama chat bot. You use the configured Ollama model endpoint and focus on local-model assistance. Never claim a request was private or offline unless the endpoint is local."
+            }
+        }
+    }
+}
+
 impl Chat {
     pub fn reset(&self) {}
+}
+
+fn system_instructions(agent: Option<ChatAgentId>) -> String {
+    match agent {
+        Some(agent) => format!("{}\n\n## Current bot\n{}", ACT3_AGENT_RULES, agent.instructions()),
+        None => ACT3_AGENT_RULES.to_string(),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -124,7 +173,10 @@ async fn send_ollama(settings: &Settings, query: String, context: Option<ChatCon
     let prompt = contextual_prompt(query, context).await?;
     let response = reqwest::Client::new()
         .post(format!("{}/api/chat", settings.ollama_url.trim_end_matches('/')))
-        .json(&json!({"model": settings.model, "messages": [{"role": "user", "content": prompt}], "stream": false}))
+        .json(&json!({"model": settings.model, "messages": [
+            {"role": "system", "content": system_instructions(Some(ChatAgentId::Ollama))},
+            {"role": "user", "content": prompt}
+        ], "stream": false}))
         .send().await.map_err(|e| format!("Ollama connection failed: {e}"))?;
     let status = response.status();
     let body: Value = response.json().await.map_err(|e| format!("Invalid Ollama response: {e}"))?;
@@ -141,7 +193,16 @@ async fn send_online(settings: &Settings, query: String, context: Option<ChatCon
     let response = reqwest::Client::new()
         .post(format!("{}/chat/completions", online_base_url(settings).trim_end_matches('/')))
         .bearer_auth(key)
-        .json(&json!({"model": settings.model, "messages": [{"role": "user", "content": prompt}]}))
+        .json(&json!({"model": settings.model, "messages": [
+            {"role": "system", "content": system_instructions(
+                match settings.provider.as_str() {
+                    "omniroute" => Some(ChatAgentId::Omniroute),
+                    "openrouter" => Some(ChatAgentId::Openrouter),
+                    _ => None,
+                }
+            )},
+            {"role": "user", "content": prompt}
+        ]}))
         .send().await.map_err(|e| format!("Online provider connection failed: {e}"))?;
     let status = response.status();
     let body: Value = response.json().await.map_err(|e| format!("Invalid online provider response: {e}"))?;
@@ -339,7 +400,8 @@ fn base64(bytes: &[u8]) -> String {
 mod tests {
     use super::{
         base64, contextual_prompt_content, online_base_url, online_key_name, read_document_text,
-        ChatContext, MAX_DOCUMENT_BYTES, MAX_DOCUMENT_TEXT_CHARS,
+        system_instructions, ChatAgentId, ChatContext, MAX_DOCUMENT_BYTES,
+        MAX_DOCUMENT_TEXT_CHARS,
     };
     use crate::settings::Settings;
     use std::path::PathBuf;
@@ -348,6 +410,39 @@ mod tests {
     use std::{fmt::Write as _, fs};
 
     static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn chat_agents_select_independent_provider_models() {
+        let mut settings = Settings::default();
+        settings.omniroute_model = "router/model-a".into();
+        settings.openrouter_model = "openrouter/model-b".into();
+        settings.ollama_model = "local-model:latest".into();
+
+        ChatAgentId::Omniroute.configure(&mut settings);
+        assert_eq!(settings.provider, "omniroute");
+        assert_eq!(settings.model, "router/model-a");
+
+        ChatAgentId::Openrouter.configure(&mut settings);
+        assert_eq!(settings.provider, "openrouter");
+        assert_eq!(settings.model, "openrouter/model-b");
+
+        ChatAgentId::Ollama.configure(&mut settings);
+        assert_eq!(settings.provider, "ollama");
+        assert_eq!(settings.model, "local-model:latest");
+    }
+
+    #[test]
+    fn every_chat_agent_receives_repository_rules_and_its_own_identity() {
+        let online = system_instructions(Some(ChatAgentId::Omniroute));
+        let openrouter = system_instructions(Some(ChatAgentId::Openrouter));
+        let offline = system_instructions(Some(ChatAgentId::Ollama));
+        assert!(online.contains("ACT 3 Assistant Rules"));
+        assert!(offline.contains("ACT 3 Assistant Rules"));
+        assert!(online.contains("purple OmniRoute chat bot"));
+        assert!(openrouter.contains("orange OpenRouter chat bot"));
+        assert!(offline.contains("green Ollama chat bot"));
+        assert!(system_instructions(None).contains("Treat attached documents"));
+    }
 
     fn inbox_test_file(name: &str, contents: &[u8]) -> PathBuf {
         let dir = crate::files::inbox_dir().join(format!(
@@ -421,6 +516,16 @@ mod tests {
         };
         assert_eq!(online_key_name(&settings), "omniroute-api-key");
         assert_eq!(online_base_url(&settings), "http://localhost:20128/v1");
+    }
+
+    #[test]
+    fn openrouter_uses_its_own_key_and_endpoint() {
+        let settings = Settings {
+            provider: "openrouter".into(),
+            ..Settings::default()
+        };
+        assert_eq!(online_key_name(&settings), "openrouter-api-key");
+        assert_eq!(online_base_url(&settings), crate::claude::DEFAULT_OPENROUTER_URL);
     }
 
     #[test]

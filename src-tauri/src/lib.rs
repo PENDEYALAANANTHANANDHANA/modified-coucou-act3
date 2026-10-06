@@ -258,8 +258,10 @@ async fn chat_send(
     chat: State<'_, Chat>,
     query: String,
     context: Option<ChatContext>,
+    agent: claude::ChatAgentId,
 ) -> Result<ChatReply, String> {
-    let settings = shared.settings.lock().unwrap().clone();
+    let mut settings = shared.settings.lock().unwrap().clone();
+    agent.configure(&mut settings);
     claude::send(&chat, &settings, query, context).await
 }
 
@@ -350,6 +352,12 @@ async fn test_provider(shared: State<'_, Shared>, provider: Option<String>) -> R
     if let Some(provider) = provider {
         settings.provider = provider;
     }
+    settings.model = match settings.provider.as_str() {
+        "ollama" => settings.ollama_model.clone(),
+        "omniroute" => settings.omniroute_model.clone(),
+        "openrouter" => settings.openrouter_model.clone(),
+        _ => settings.model,
+    };
     claude::test_provider(&settings).await
 }
 
@@ -373,7 +381,7 @@ async fn provider_status(shared: State<'_, Shared>) -> Result<ProviderStatus, St
     };
     Ok(ProviderStatus {
         ollama,
-        ollama_model: settings.model,
+        ollama_model: settings.ollama_model,
         ollama_models,
         openai_key: secrets::present("online-api-key"),
         openrouter_key: secrets::present("openrouter-api-key"),

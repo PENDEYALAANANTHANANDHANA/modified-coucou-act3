@@ -178,6 +178,11 @@ export class Island {
     this.wakeStrip = h("div", { id: "wake-strip" });
     this.botGlow = h("div", { id: "bot-glow" });
     this.botCanvas = h("canvas", { id: "bot-canvas" });
+    this.botCanvas.addEventListener("click", () => {
+      if (State.mode === "expanded" && State.view === "prompt") {
+        document.dispatchEvent(new Event("act3:open-agent-picker"));
+      }
+    });
     this.greetingCanvas = h("canvas", { id: "greeting-canvas" });
     this.miniGrid = h("div", { id: "mini-grid" });
     this.countdown = h("div", { id: "countdown" });
@@ -858,10 +863,13 @@ export class Island {
   private syncDom() {
     const expanded = State.mode === "expanded";
     const greetingActive = expanded && State.view === "greeting";
+    const askViewActive = expanded && State.view === "prompt";
 
     this.contentEl.style.opacity = expanded && !greetingActive ? "1" : "0";
     this.contentEl.style.pointerEvents = expanded && !greetingActive ? "auto" : "none";
     this.greetingCanvas.style.display = greetingActive ? "block" : "none";
+    this.botCanvas.style.pointerEvents = askViewActive ? "auto" : "none";
+    this.botCanvas.style.cursor = askViewActive ? "pointer" : "default";
 
     this.header.sync();
     for (const [name, view] of this.views) {

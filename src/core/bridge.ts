@@ -5,7 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import type { Settings } from "./state";
+import type { ChatAgentId, Settings } from "./state";
 
 export const IS_TAURI =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -85,8 +85,8 @@ export const Bridge = {
 
   // ── Chat, files, secrets ──────────────────────────────────────────────────
   /** One chat turn. The API key and any file bytes never leave Rust. */
-  chatSend: (query: string, context: ChatContext | null) =>
-    callOrThrow<ChatReply>("chat_send", { query, context }),
+  chatSend: (query: string, context: ChatContext | null, agent: ChatAgentId) =>
+    callOrThrow<ChatReply>("chat_send", { query, context, agent }),
   runCustomTask: (instructions: string) =>
     callOrThrow<{ text: string }>("run_custom_task", { instructions }),
   generateCodeChanges: (root: string, instructions: string) =>

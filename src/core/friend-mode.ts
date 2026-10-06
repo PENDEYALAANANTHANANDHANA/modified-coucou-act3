@@ -51,18 +51,21 @@ export class FriendMode {
       ) return;
 
       if (await Bridge.systemIdleSeconds() < MIN_IDLE_SECONDS) return;
-      const reply = await Bridge.chatSend(FRIEND_PROMPT, null);
+      const agent = State.chatAgent;
+      const reply = await Bridge.chatSend(FRIEND_PROMPT, null, agent);
 
       if (
         !State.settings.friendModeEnabled ||
         State.paused ||
+        State.chatAgent !== agent ||
         islandIsOpen() ||
         isQuietHour(new Date().getHours(), State.settings.friendModeQuietStartHour, State.settings.friendModeQuietEndHour) ||
         await Bridge.systemIdleSeconds() < MIN_IDLE_SECONDS
       ) return;
 
-      const id = State.chatHistory.reduce((maxId, message) => Math.max(maxId, message.id), 0) + 1;
-      State.chatHistory.push({ id, role: "assistant", content: reply.text });
+      const history = State.chatHistories[agent];
+      const id = history.reduce((maxId, message) => Math.max(maxId, message.id), 0) + 1;
+      history.push({ id, role: "assistant", content: reply.text });
       State.stateOverride = null;
       this.island.alert("prompt");
     } catch (error) {

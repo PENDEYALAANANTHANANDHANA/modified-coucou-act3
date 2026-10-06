@@ -120,6 +120,15 @@ are untouched and their location does not matter. Each file is limited to
 same chat. Scanned/image-only PDFs are not supported yet because they require
 OCR.
 
+The chat has three color-coded bots with separate conversation histories:
+**OmniRoute** (purple) uses its configured online model router, **OpenRouter**
+(orange) uses the configured OpenRouter model and key, and **Ollama** (green)
+uses its configured local model endpoint. Each bot keeps its own selected
+model in Settings. All three follow the shared [`AGENTS.md`](./AGENTS.md)
+assistant rules, supplied as system instructions for chat, friend-mode
+greetings, and coding requests. Mochi also shows occasional, silent random
+expressions while idle; these are visual-only and do not trigger AI requests.
+
 No telemetry. The update checker contacts GitHub only when you request a check;
 chat and integrations connect only to the services you configure yourself.
 
